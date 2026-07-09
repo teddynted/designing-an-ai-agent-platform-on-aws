@@ -2,7 +2,7 @@
 
 A production-ready platform for running **autonomous AI agents** and **event-driven AI workflows** on AWS — supporting both managed inference (Amazon Bedrock) and self-hosted inference (Ollama), orchestrated through **n8n** and **OpenClaw**.
 
-> **Status: Milestone 1 — Initial Architecture.** Design and documentation only. No application implementation, no CloudFormation templates, no workflows. This milestone establishes the architectural foundation that later milestones build on.
+> **Design and documentation only.** No application implementation, no CloudFormation templates, no workflows. This repository establishes the architectural foundation, and records why each decision was made and what it costs.
 
 ---
 
@@ -94,7 +94,7 @@ Twelve [ADRs](docs/adr/) record what was chosen, what was rejected, and what it 
 
 ### Blog
 
-This milestone is written to become the technical article *Designing an AI Agent Platform on AWS*. See [docs/blog/](docs/blog/README.md) for the narrative spine and source mapping.
+This documentation is written to become the technical article *Designing an AI Agent Platform on AWS*. See [docs/blog/](docs/blog/README.md) for the narrative spine and source mapping.
 
 ## Technology
 
@@ -121,14 +121,8 @@ Documentation that claims completeness is not documentation.
 
 3. **The two controls that matter most do not exist yet.** The budget circuit-breaker and the sandbox boundary are what stand between this platform and its two most likely incidents — a runaway agent and a compromised one. **The platform must not be pointed at production data or real credentials until they are built.** → [12 §12.4](docs/architecture/12-risks-assumptions-constraints.md)
 
-## Milestones
+## Before anything is built
 
-| # | Scope | Status |
-|---|---|---|
-| **1** | **Initial architecture and design rationale** | **✅ this milestone** |
-| 2 | CloudFormation stacks, AMI pipeline, sandbox boundary, budget circuit-breaker | Planned |
-| 3 | Model Gateway with token metering and routing policy | Planned |
-| 4 | Agent quality metrics, approval workflow, injection signals | Planned |
-| 5 | Chaos testing — verify the RTOs in this document are facts, not claims | Planned |
+One validation task comes before any infrastructure is written: **confirm that OpenClaw's state directory works correctly on EFS.** Every high-availability claim in these documents rests on it, and it has not been tested. If it fails, the cross-AZ recovery story collapses and the Gateway falls back to AZ-pinned EBS with a worse RTO and a non-zero RPO.
 
-Milestone 2 opens with a single validation task: **confirm that OpenClaw's state directory works correctly on EFS.** Every high-availability claim here depends on it, and it has not been tested. → [12 §12.1](docs/architecture/12-risks-assumptions-constraints.md)
+The full ordered list of what to validate and build first is in [12 §12.4](docs/architecture/12-risks-assumptions-constraints.md).

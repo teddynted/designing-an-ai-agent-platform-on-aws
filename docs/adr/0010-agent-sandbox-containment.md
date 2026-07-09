@@ -66,7 +66,7 @@ Design blast radius, not filters. Concretely:
 - **Human approval is a rate-limited resource.** Approval fatigue converts a control into a rubber stamp. This is a *social* control — the weakest kind. Monitor approval-queue depth and wait time; keep the privileged tier small enough that approvals stay rare and therefore stay real.
 - Deny-by-default egress is operationally annoying. Every new tool needs an allowlist entry. Expect pressure to widen it; resist.
 - n8n workers are an acknowledged soft spot: arbitrary outbound HTTPS is inherent to a workflow-integration tool. They compensate with narrow IAM roles and by never holding the Gateway's credentials.
-- **None of this exists in Milestone 1.** Until the sandbox boundary is built, the platform must not be pointed at production data or real credentials. This is a sequencing requirement, not a hardening backlog item ([12 §12.4](../architecture/12-risks-assumptions-constraints.md)).
+- **None of this exists yet.** Until the sandbox boundary is built, the platform must not be pointed at production data or real credentials. This is a sequencing requirement, not a hardening backlog item ([12 §12.4](../architecture/12-risks-assumptions-constraints.md)).
 
 ## Alternatives considered
 
