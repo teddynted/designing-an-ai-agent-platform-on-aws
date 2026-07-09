@@ -55,9 +55,9 @@ Aurora Serverless v2 is a reasonable substitute for RDS where the workload is sp
 
 ## Assumption to verify
 
-⚠ This ADR assumes queue mode isolates **all** durable state from workers, and that the broker is Redis. Both were taken from established knowledge of n8n's architecture and were **not re-verified against current documentation during this milestone** (assumption A5). If workers retain any durable local state, they are not Spot-safe and this ADR must be revisited. **Confirm before building the worker ASG.**
+⚠ This ADR assumes queue mode isolates **all** durable state from workers, and that the broker is Redis. Both were taken from established knowledge of n8n's architecture and were **not re-verified against current documentation during design** (assumption A5). If workers retain any durable local state, they are not Spot-safe and this ADR must be revisited. **Confirm before building the worker ASG.**
 
-Also unresolved: whether dedicated **webhook processor** instances (a further queue-mode split) are warranted at our traffic volume, or whether `main` should handle webhook ingress directly. Deferred to Milestone 2 with real traffic figures.
+Also unresolved: whether dedicated **webhook processor** instances (a further queue-mode split) are warranted at our traffic volume, or whether `main` should handle webhook ingress directly. Deferred until there are real traffic figures.
 
 ## Alternatives considered
 

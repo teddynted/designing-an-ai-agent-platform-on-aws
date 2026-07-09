@@ -53,7 +53,7 @@ The cold start is thus made *invisible* rather than *small*. That is the real de
 - AMI storage and snapshot costs, which grow with model count.
 - ⚠ **Fast Snapshot Restore bills ≈ $0.75/DSU-hour, per snapshot, per AZ — continuously while enabled** (≈ $540/month each). Enabled on three snapshots across three AZs, it costs more than the GPU instances it accelerates. **Enable on one hot snapshot, in launch AZs only, and alarm on the FSR-enabled snapshot count.** This is a cold-start accelerator with a standing cost, and it is an easy way to build a bill nobody can explain ([09 §9.6](../architecture/09-cost.md)).
 - Residual 2–4 minute cold start remains. It is hidden by SQS and Bedrock routing, not removed. A workload that is both latency-sensitive and requires self-hosted models has no good answer here.
-- Cold-start times in this ADR are **estimates**. Measure them in Milestone 2.
+- Cold-start times in this ADR are **estimates**. Measure them during implementation.
 
 ## Alternatives considered
 
