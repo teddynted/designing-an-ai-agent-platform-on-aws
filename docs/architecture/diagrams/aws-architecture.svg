@@ -43,6 +43,176 @@
     <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/>
     </marker>
+
+    <!-- Service glyphs. Drawn to evoke the AWS icon set, not copied from it. -->
+    <symbol id="i-ec2" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="5.5" y="5.5" width="13" height="13" rx="1.5"/>
+        <rect x="9.5" y="9.5" width="5" height="5" rx="0.5"/>
+        <path d="M9 5.5V3M15 5.5V3M9 18.5V21M15 18.5V21M5.5 9H3M5.5 15H3M18.5 9H21M18.5 15H21"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-gpu" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="5.5" y="5.5" width="13" height="13" rx="1.5"/>
+        <path d="M9.5 9.5v5M12 9.5v5M14.5 9.5v5"/>
+        <path d="M9 5.5V3M15 5.5V3M9 18.5V21M15 18.5V21"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-lambda" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 5.5h2.2l6.3 13"/>
+        <path d="M12.8 11.6 7.4 18.5"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-cube" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3.6 19.5 8v8L12 20.4 4.5 16V8z"/>
+        <path d="M4.5 8 12 12.3 19.5 8M12 12.3v8.1"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-lock" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4.8" y="10" width="14.4" height="9.5" rx="2"/>
+        <path d="M8 10V7.6a4 4 0 0 1 8 0V10"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-alb" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="5.2" r="2.2"/>
+        <circle cx="5.6" cy="18.8" r="2.2"/>
+        <circle cx="12" cy="18.8" r="2.2"/>
+        <circle cx="18.4" cy="18.8" r="2.2"/>
+        <path d="M12 7.4v3.4M5.6 16.6v-2.4h12.8v2.4M12 14.2v2.4"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-nat" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 9h13M14 6l3 3-3 3"/>
+        <path d="M20 15H7M10 18l-3-3 3-3"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-endpoint" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="6"/>
+        <path d="M12 6V2.8M12 21.2V18M6 12H2.8M21.2 12H18"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-rds" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <ellipse cx="12" cy="6.4" rx="6.8" ry="2.7"/>
+        <path d="M5.2 6.4v11.2c0 1.5 3 2.7 6.8 2.7s6.8-1.2 6.8-2.7V6.4"/>
+        <path d="M5.2 12c0 1.5 3 2.7 6.8 2.7s6.8-1.2 6.8-2.7"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-cache" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <ellipse cx="12" cy="6.2" rx="6.8" ry="2.6"/>
+        <path d="M5.2 6.2v11.4c0 1.5 3 2.6 6.8 2.6s6.8-1.1 6.8-2.6V6.2"/>
+        <path d="M13.2 9.8 10 14.4h3.4L12.4 18.6"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-efs" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M7.5 3.6h5.6l4.4 4.4v11a1.5 1.5 0 0 1-1.5 1.5H7.5A1.5 1.5 0 0 1 6 19V5.1a1.5 1.5 0 0 1 1.5-1.5z"/>
+        <path d="M13 3.6V8.2h4.5"/>
+        <path d="M9.2 12.6h5.6M9.2 15.8h5.6"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-s3" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4.9 6.6h14.2l-1.6 12.1a1.5 1.5 0 0 1-1.5 1.3H8a1.5 1.5 0 0 1-1.5-1.3z"/>
+        <ellipse cx="12" cy="6.4" rx="7.1" ry="2.4"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-bolt" viewBox="0 0 24 24">
+      <path d="M13.2 2.6 6.4 13.8h4.6L9.8 21.4l7-11.6h-4.4z" fill="#FFFFFF" stroke="none"/>
+    </symbol>
+
+    <symbol id="i-sqs" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4.4" y="4.4" width="12.2" height="12.2" rx="2"/>
+        <path d="M8.4 20.4h8a3 3 0 0 0 3-3v-8"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-cloudwatch" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4.6 16.4a7.4 7.4 0 1 1 14.8 0"/>
+        <path d="M12 16.4 15.8 12"/>
+        <circle cx="12" cy="16.4" r="1.3" fill="#FFFFFF" stroke="none"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-key" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="8" cy="12" r="3.6"/>
+        <path d="M11.6 12h8.6M17 12v3.2M20.2 12v2.6"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-shield" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3.4 18.4 5.8v5.6c0 4.2-2.8 6.6-6.4 8-3.6-1.4-6.4-3.8-6.4-8V5.8z"/>
+        <path d="m9.4 11.9 1.8 1.8 3.5-3.6"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-ssm" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4.4 7.4h15.2M4.4 12h15.2M4.4 16.6h15.2"/>
+        <circle cx="9" cy="7.4" r="1.9" fill="#FFFFFF" stroke="none"/>
+        <circle cx="15" cy="12" r="1.9" fill="#FFFFFF" stroke="none"/>
+        <circle cx="8" cy="16.6" r="1.9" fill="#FFFFFF" stroke="none"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-cfn" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4.4" y="4.4" width="6.6" height="6.6" rx="1"/>
+        <rect x="13" y="4.4" width="6.6" height="6.6" rx="1"/>
+        <rect x="4.4" y="13" width="6.6" height="6.6" rx="1"/>
+        <rect x="13" y="13" width="6.6" height="6.6" rx="1"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-bedrock" viewBox="0 0 24 24">
+      <path d="M10.6 3.2 12.3 7.7 16.8 9.4 12.3 11.1 10.6 15.6 8.9 11.1 4.4 9.4 8.9 7.7z" fill="#FFFFFF" stroke="none"/>
+      <path d="M17.2 13.4 18.1 15.8 20.5 16.7 18.1 17.6 17.2 20 16.3 17.6 13.9 16.7 16.3 15.8z" fill="#FFFFFF" stroke="none"/>
+    </symbol>
+
+    <symbol id="i-chat" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 6.6a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-5.4L7 19.4V15.6a2 2 0 0 1-2-2z"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-globe" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="7.4"/>
+        <path d="M4.6 12h14.8"/>
+        <path d="M12 4.6c2 2.2 3 4.7 3 7.4s-1 5.2-3 7.4c-2-2.2-3-4.7-3-7.4s1-5.2 3-7.4z"/>
+      </g>
+    </symbol>
+
+    <symbol id="i-clock" viewBox="0 0 24 24">
+      <g fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="7.4"/>
+        <path d="M12 7.4V12l3 2"/>
+      </g>
+    </symbol>
   </defs>
 
   <rect class="canvas" width="1440" height="1120"/>
@@ -57,6 +227,7 @@
   <g transform="translate(112,66)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#8B96A3"/>
+    <use href="#i-globe" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Webhook / API callers</text>
     <text class="t-desc" x="46" y="41">inbound HTTPS</text>
   </g>
@@ -64,6 +235,7 @@
   <g transform="translate(300,66)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#8B96A3"/>
+    <use href="#i-chat" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Chat channels</text>
     <text class="t-desc" x="46" y="41">Slack · WhatsApp · Telegram</text>
   </g>
@@ -71,6 +243,7 @@
   <g transform="translate(560,66)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#8B96A3"/>
+    <use href="#i-clock" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Schedules · SaaS events</text>
     <text class="t-desc" x="46" y="41">to EventBridge</text>
   </g>
@@ -95,6 +268,7 @@
   <g transform="translate(112,320)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#8C4FFF"/>
+    <use href="#i-alb" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Application LB</text>
     <text class="t-desc" x="46" y="41">spans both AZs</text>
   </g>
@@ -105,6 +279,7 @@
   <g transform="translate(112,420)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <use href="#i-ec2" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">n8n main</text>
     <text class="t-desc" x="46" y="41">On-Demand · Graviton</text>
   </g>
@@ -112,24 +287,27 @@
   <g transform="translate(300,420)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <use href="#i-ec2" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">OpenClaw Gateway</text>
     <text class="t-desc" x="46" y="41">On-Demand · singleton</text>
-    <rect class="badge" x="118" y="6" width="44" height="13" rx="6"/>
-    <text class="badge-t" x="140" y="16" text-anchor="middle">0 INGRESS</text>
+    <rect class="badge" x="120" y="3" width="44" height="12" rx="6"/>
+    <text class="badge-t" x="142" y="11.8" text-anchor="middle">0 INGRESS</text>
   </g>
 
   <g transform="translate(112,490)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <use href="#i-ec2" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">n8n workers</text>
     <text class="t-desc" x="46" y="41">EC2 · stateless</text>
-    <rect class="spot" x="130" y="6" width="32" height="13" rx="6"/>
-    <text class="badge-t" x="146" y="16" text-anchor="middle">SPOT</text>
+    <rect class="spot" x="130" y="3" width="32" height="12" rx="6"/>
+    <text class="badge-t" x="146" y="11.8" text-anchor="middle">SPOT</text>
   </g>
 
   <g transform="translate(300,490)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#DD344C"/>
+    <use href="#i-lock" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Tool sandbox</text>
     <text class="t-desc" x="46" y="41">Docker · no creds, no IMDS</text>
   </g>
@@ -140,6 +318,7 @@
   <g transform="translate(112,614)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#C925D1"/>
+    <use href="#i-rds" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">RDS PostgreSQL</text>
     <text class="t-desc" x="46" y="41">Multi-AZ primary</text>
   </g>
@@ -147,6 +326,7 @@
   <g transform="translate(300,614)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#C925D1"/>
+    <use href="#i-cache" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">ElastiCache Redis</text>
     <text class="t-desc" x="46" y="41">n8n queue</text>
   </g>
@@ -154,6 +334,7 @@
   <g transform="translate(112,684)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#7AA116"/>
+    <use href="#i-efs" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">EFS mount target</text>
     <text class="t-desc" x="46" y="41">Gateway state · regional</text>
   </g>
@@ -172,6 +353,7 @@
   <g transform="translate(602,320)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#8C4FFF"/>
+    <use href="#i-nat" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">NAT Gateway</text>
     <text class="t-desc" x="46" y="41">one per AZ in prod</text>
   </g>
@@ -182,15 +364,17 @@
   <g transform="translate(602,420)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <use href="#i-ec2" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">n8n workers</text>
     <text class="t-desc" x="46" y="41">EC2 · stateless</text>
-    <rect class="spot" x="130" y="6" width="32" height="13" rx="6"/>
-    <text class="badge-t" x="146" y="16" text-anchor="middle">SPOT</text>
+    <rect class="spot" x="130" y="3" width="32" height="12" rx="6"/>
+    <text class="badge-t" x="146" y="11.8" text-anchor="middle">SPOT</text>
   </g>
 
   <g transform="translate(790,420)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <use href="#i-cube" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Model Gateway</text>
     <text class="t-desc" x="46" y="41">OpenAI-compatible seam</text>
   </g>
@@ -198,10 +382,11 @@
   <g transform="translate(602,490)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#01A88D"/>
+    <use href="#i-gpu" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Ollama · GPU</text>
     <text class="t-desc" x="46" y="41">scale-to-zero · g5/g6</text>
-    <rect class="spot" x="130" y="6" width="32" height="13" rx="6"/>
-    <text class="badge-t" x="146" y="16" text-anchor="middle">SPOT</text>
+    <rect class="spot" x="130" y="3" width="32" height="12" rx="6"/>
+    <text class="badge-t" x="146" y="11.8" text-anchor="middle">SPOT</text>
   </g>
 
   <rect class="box box-data" x="586" y="590" width="442" height="200" rx="4"/>
@@ -210,6 +395,7 @@
   <g transform="translate(602,614)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#C925D1"/>
+    <use href="#i-rds" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">RDS PostgreSQL</text>
     <text class="t-desc" x="46" y="41">Multi-AZ standby</text>
   </g>
@@ -217,6 +403,7 @@
   <g transform="translate(790,614)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#C925D1"/>
+    <use href="#i-cache" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">ElastiCache replica</text>
     <text class="t-desc" x="46" y="41">automatic failover</text>
   </g>
@@ -224,6 +411,7 @@
   <g transform="translate(602,684)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#7AA116"/>
+    <use href="#i-efs" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">EFS mount target</text>
     <text class="t-desc" x="46" y="41">same file system</text>
   </g>
@@ -235,30 +423,35 @@
   <g transform="translate(96,866)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#4D27AA"/>
+    <use href="#i-cloudwatch" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">CloudWatch Logs</text>
     <text class="t-desc" x="46" y="41">interface</text>
   </g>
   <g transform="translate(284,866)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#DD344C"/>
+    <use href="#i-key" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Secrets Manager</text>
     <text class="t-desc" x="46" y="41">interface</text>
   </g>
   <g transform="translate(472,866)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#4D27AA"/>
+    <use href="#i-ssm" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Systems Manager</text>
     <text class="t-desc" x="46" y="41">interface · no SSH</text>
   </g>
   <g transform="translate(660,866)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#01A88D"/>
+    <use href="#i-endpoint" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">bedrock-runtime</text>
     <text class="t-desc" x="46" y="41">interface · stays in VPC</text>
   </g>
   <g transform="translate(848,866)">
     <rect class="card" width="168" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#7AA116"/>
+    <use href="#i-s3" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">S3 · Gateway EP</text>
     <text class="t-desc" x="46" y="41">free · weights, no NAT</text>
   </g>
@@ -270,54 +463,63 @@
   <g transform="translate(1084,300)">
     <rect class="card" width="272" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#01A88D"/>
+    <use href="#i-bedrock" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Amazon Bedrock</text>
     <text class="t-desc" x="46" y="41">default inference · Ollama's backstop</text>
   </g>
   <g transform="translate(1084,364)">
     <rect class="card" width="272" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#7AA116"/>
+    <use href="#i-s3" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Amazon S3</text>
     <text class="t-desc" x="46" y="41">model weights · artifacts · log archive</text>
   </g>
   <g transform="translate(1084,428)">
     <rect class="card" width="272" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#E7157B"/>
+    <use href="#i-bolt" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Amazon EventBridge</text>
     <text class="t-desc" x="46" y="41">the platform's nervous system</text>
   </g>
   <g transform="translate(1084,492)">
     <rect class="card" width="272" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <use href="#i-lambda" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">AWS Lambda</text>
     <text class="t-desc" x="46" y="41">scaler · spot-drain · router · metering</text>
   </g>
   <g transform="translate(1084,556)">
     <rect class="card" width="272" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#E7157B"/>
+    <use href="#i-sqs" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Amazon SQS</text>
     <text class="t-desc" x="46" y="41">buffers the GPU cold start</text>
   </g>
   <g transform="translate(1084,620)">
     <rect class="card" width="272" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#4D27AA"/>
+    <use href="#i-cloudwatch" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Amazon CloudWatch</text>
     <text class="t-desc" x="46" y="41">agent_run_id traces · token &amp; cost metrics</text>
   </g>
   <g transform="translate(1084,684)">
     <rect class="card" width="272" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#DD344C"/>
+    <use href="#i-shield" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">Secrets Manager · IAM</text>
     <text class="t-desc" x="46" y="41">per-component roles · no long-lived keys</text>
   </g>
   <g transform="translate(1084,748)">
     <rect class="card" width="272" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#4D27AA"/>
+    <use href="#i-ssm" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">SSM Parameter Store</text>
     <text class="t-desc" x="46" y="41">cross-stack contract · AMI IDs · routing</text>
   </g>
   <g transform="translate(1084,812)">
     <rect class="card" width="272" height="58" rx="6"/>
     <rect x="10" y="16" width="26" height="26" rx="4" fill="#4D27AA"/>
+    <use href="#i-cfn" x="13" y="19" width="20" height="20"/>
     <text class="t-name" x="46" y="26">AWS CloudFormation</text>
     <text class="t-desc" x="46" y="41">nested stacks, layered by rate of change</text>
   </g>
@@ -380,5 +582,5 @@
 
   <text class="t-legend" x="24" y="1074">SPOT = interruptible, stateless, retryable.  0 INGRESS = security group has no inbound rules; administration via SSM Session Manager.</text>
   <text class="t-legend" x="24" y="1092">Bedrock is both the default for interactive inference and the fallback when Spot GPU capacity is unavailable — so a capacity shortfall raises the bill, not an outage.</text>
-  <text class="t-legend" x="24" y="1110">Diagram is illustrative and uses an approximation of the AWS category palette, not the official AWS icon set. See docs/architecture/ for the authoritative design.</text>
+  <text class="t-legend" x="24" y="1110">Diagram is illustrative: glyphs and colours approximate the AWS icon set and category palette rather than reproducing them. See docs/architecture/ for the authoritative design.</text>
 </svg>
