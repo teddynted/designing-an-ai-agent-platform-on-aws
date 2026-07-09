@@ -529,9 +529,8 @@
   <path class="flow" d="M 196 124 L 196 314" marker-end="url(#ah)"/>
   <!-- 2: chat channels -> Gateway (outbound-initiated) -->
   <path class="flow-d" d="M 360 124 L 360 414" marker-end="url(#ah)"/>
-  <text class="t-note" x="392" y="206">outbound-initiated:</text>
-  <text class="t-note" x="392" y="218">the Gateway dials out,</text>
-  <text class="t-note" x="392" y="230">so it needs no ingress</text>
+  <text class="t-note" x="392" y="202">outbound-initiated: the Gateway</text>
+  <text class="t-note" x="392" y="214">dials out, so it needs no ingress</text>
   <!-- 3: ALB -> n8n main -->
   <path class="flow" d="M 196 378 L 196 414" marker-end="url(#ah)"/>
   <!-- 4: n8n main -> workers -->
