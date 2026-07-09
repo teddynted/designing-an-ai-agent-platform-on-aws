@@ -78,7 +78,7 @@ The residual exposure is a **3–5 minute conversational outage** on instance or
 
 ### What would break this
 
-If OpenClaw's state proves EFS-incompatible — e.g. it uses SQLite with locking semantics EFS handles poorly, or requires low-latency random I/O — the EFS decision collapses and we fall back to EBS + AZ-pinning + frequent snapshots, trading RPO and cross-AZ RTO. **This is an untested assumption and the highest-priority validation task before implementation.** Tracked in [12 — Risks](12-risks-assumptions-constraints.md).
+If OpenClaw's state proves EFS-incompatible — e.g. it uses SQLite with locking semantics EFS handles poorly, or requires low-latency random I/O — the EFS decision collapses and we fall back to EBS + AZ-pinning + frequent snapshots, trading RPO and cross-AZ RTO. **This is an untested assumption and the highest-priority validation task for Milestone 2.** Tracked in [12 — Risks](12-risks-assumptions-constraints.md).
 
 ## 7.5 Failure-mode matrix
 
@@ -100,7 +100,7 @@ Two rows have no automatic response, and they are the two worth designing around
 
 **Gateway EFS loss** is the platform's most damaging survivable failure, because the state cannot be re-derived from anywhere — only a human re-scanning QR codes restores it. Mitigations: EFS Backup enabled, `DeletionPolicy: Retain`, cross-region AWS Backup copy, and an SCP denying `elasticfilesystem:DeleteFileSystem` in prod. Treat it as unrecoverable and defend accordingly.
 
-**Region failure** is out of scope for this design and should be stated as such rather than quietly assumed away. The platform is **single-region, multi-AZ**. Cross-region DR is a later decision with its own cost. What we do now is make it *possible*: AMIs distributed cross-region, EBS/EFS backups copied cross-region, S3 buckets replicated, and all infrastructure defined in CloudFormation so a second region is a stack deployment rather than an archaeology project. Realistic cold-standby RTO: **hours.** Say so.
+**Region failure** is out of scope for Milestone 1 and should be stated as such rather than quietly assumed away. The platform is **single-region, multi-AZ**. Cross-region DR is a Milestone 4+ decision with its own cost. What we do now is make it *possible*: AMIs distributed cross-region, EBS/EFS backups copied cross-region, S3 buckets replicated, and all infrastructure defined in CloudFormation so a second region is a stack deployment rather than an archaeology project. Realistic cold-standby RTO: **hours.** Say so.
 
 ## 7.6 Load characteristics and where they bite
 
