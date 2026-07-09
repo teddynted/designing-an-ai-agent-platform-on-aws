@@ -5,7 +5,7 @@
 
 ## Context
 
-This platform will be built across several milestones by people who were not present for this one. The architecture documents describe *what* the system is. They are poorly suited to explaining *why* an option that looks obviously better was rejected — that reasoning lives in a designer's head and evaporates.
+This platform will be built over time by people who were not present when it was designed. The architecture documents describe *what* the system is. They are poorly suited to explaining *why* an option that looks obviously better was rejected — that reasoning lives in a designer's head and evaporates.
 
 The predictable failure: eighteen months from now, someone sees `capacity-optimized-prioritized` Spot allocation, reasons that `lowest-price` would be cheaper, changes it, and rediscovers Spot churn the expensive way. The architecture document said what we do. It did not say what happens if you do the other thing.
 

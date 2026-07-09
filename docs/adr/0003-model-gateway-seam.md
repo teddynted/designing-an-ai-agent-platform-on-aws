@@ -29,7 +29,7 @@ It owns:
 - **Per-agent token budgets and the circuit-breaker**
 - **Token and cost metering**, dimensioned by `agent_run_id`
 
-**The contract is defined in Milestone 1; the router is built later.** Until it exists, callers speak the same contract directly to Bedrock. Defining the seam early costs nothing; retrofitting it after forty workflows hold provider-specific configuration is a migration.
+**The contract is defined now; the router is built later.** Until it exists, callers speak the same contract directly to Bedrock. Defining the seam early costs nothing; retrofitting it after forty workflows hold provider-specific configuration is a migration.
 
 **Why OpenAI-compatible specifically:** Ollama already speaks it natively, Bedrock can be fronted by it, and essentially every LLM library and tool targets it. Choosing a *de facto* standard rather than a bespoke interface is what makes adapters cheap and makes the seam free to those who do not use it.
 
@@ -55,7 +55,7 @@ It owns:
 
 **Direct SDK calls from each caller.** Rejected: provider choice diffuses into every workflow; no chokepoint for budgets, fallback, or metering. Cheapest today, most expensive at the first provider change or the first runaway agent.
 
-**LiteLLM or a comparable off-the-shelf proxy.** A strong option, and a likely *implementation* of this ADR rather than an alternative to it. This ADR decides that the seam exists and what contract it speaks. Whether to build the adapter layer or adopt LiteLLM is a Milestone 3 implementation decision, deliberately left open.
+**LiteLLM or a comparable off-the-shelf proxy.** A strong option, and a likely *implementation* of this ADR rather than an alternative to it. This ADR decides that the seam exists and what contract it speaks. Whether to build the adapter layer or adopt LiteLLM is an implementation decision, deliberately left open.
 
 **Bedrock only; drop Ollama.** Simplest, and eliminates GPU cold starts, Spot capacity risk, and an entire fleet. Rejected because the brief requires self-hosted models, and because data-residency and high-volume-cost cases are real. But note: **if those cases do not materialise, this is the right architecture**, and the seam makes removing Ollama a config change rather than a rewrite. The seam earns its keep in both directions.
 
