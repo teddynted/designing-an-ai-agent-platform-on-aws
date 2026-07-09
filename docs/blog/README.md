@@ -2,7 +2,7 @@
 
 The architecture documentation in `docs/architecture/` and `docs/adr/` is the **single source of truth**. This file is the **narrative spine** for the technical article — the argument, its order, and where each section's material already lives.
 
-Deliberately *not* a draft of the article. A second prose copy of the same content would drift from the docs almost immediately, and then nobody would know which one was true. Write the article from this spine, pulling material from the linked sources.
+Deliberately *not* a draft of the article. A second prose copy of the same content would drift from the docs within a milestone, and then nobody would know which one was true. Write the article from this spine, pulling material from the linked sources.
 
 ---
 
@@ -104,7 +104,7 @@ Do not end on a triumphant diagram. End on the three admissions from the README:
 2. Prompt injection is contained, not solved.
 3. The two controls that matter most — the circuit-breaker and the sandbox — **do not exist yet**, and the platform must not touch production credentials until they do.
 
-The last one is the strongest ending available: a design that names its own preconditions for being safe to use.
+The last one is the strongest ending available: a design milestone that names its own preconditions for being safe to use.
 
 *Source: [12](../architecture/12-risks-assumptions-constraints.md), [README](../../README.md)*
 
@@ -128,7 +128,7 @@ The last one is the strongest ending available: a design that names its own prec
 ## Editorial notes
 
 - **Every claim in the article must trace to a doc.** If the article makes a claim the docs do not, fix the docs first.
-- **Numbers are illustrative.** Cost figures are order-of-magnitude for `us-east-1` and are labelled as such in [09](../architecture/09-cost.md). Bedrock batch/prompt-caching discounts and n8n queue-mode internals were **assumed, not verified**, during design. Verify before publishing — an article is a stronger claim than an internal doc.
-- **RTO/RPO figures are designed, not measured.** Chaos testing is where they become facts. Say so in the article rather than implying they were tested.
+- **Numbers are illustrative.** Cost figures are order-of-magnitude for `us-east-1` and are labelled as such in [09](../architecture/09-cost.md). Bedrock batch/prompt-caching discounts and n8n queue-mode internals were **assumed, not verified**, during Milestone 1. Verify before publishing — an article is a stronger claim than an internal doc.
+- **RTO/RPO figures are designed, not measured.** Milestone 5 is where they become facts. Say so in the article rather than implying they were tested.
 - **The audience is an engineer who has deployed things on AWS and is sceptical of AI-platform hype.** Trade-offs over enthusiasm; admissions over completeness.
 - **Suggested length:** 3,000–4,500 words. Sections 4, 6, and 7 are the differentiated content — give them room and compress sections 1–2.
