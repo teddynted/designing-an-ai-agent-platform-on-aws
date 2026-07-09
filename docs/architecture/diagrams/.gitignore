@@ -1,0 +1,3 @@
+# Graphviz intermediate emitted by `diagrams` alongside the PNG
+aws-architecture
+*.gv

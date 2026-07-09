@@ -29,6 +29,12 @@ Three ideas carry the rest:
 
 ## Architecture at a glance
 
+![AI Agent Platform on AWS — infrastructure architecture](docs/architecture/diagrams/aws-architecture.svg)
+
+<sub>Full-size and regeneration notes: [`docs/architecture/diagrams/`](docs/architecture/diagrams/README.md)</sub>
+
+The same architecture as a logical flow:
+
 ```mermaid
 flowchart TB
     CH["Chat channels"] -.outbound-initiated.-> OC
@@ -80,6 +86,7 @@ Two details are load-bearing and easy to miss:
 | [10 — Operations](docs/architecture/10-operations.md) | The agent run as the unit of observability |
 | [11 — Extensibility](docs/architecture/11-extensibility.md) | The four seams, and where the design resists change |
 | [12 — Risks](docs/architecture/12-risks-assumptions-constraints.md) | Assumptions, constraints, risk register |
+| [Diagrams](docs/architecture/diagrams/README.md) | AWS infrastructure diagram (SVG + official-icon PNG source) |
 
 ### Decisions
 

@@ -1,0 +1,384 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1120" width="1440" height="1120" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>AI Agent Platform on AWS — Milestone 1 architecture</title>
+  <desc>Three-plane architecture: control plane (serverless), agent plane (stateful, private subnets), inference plane (Spot GPU plus Bedrock). Single region, two Availability Zones.</desc>
+
+  <style>
+    .canvas   { fill: #F7F8FA; }
+    .t-title  { fill: #16191F; font-size: 21px; font-weight: 700; }
+    .t-sub    { fill: #5F6B7A; font-size: 12px; }
+    .t-zone   { fill: #5F6B7A; font-size: 12px; font-weight: 600; letter-spacing: .3px; }
+    .t-name   { fill: #16191F; font-size: 11px; font-weight: 600; }
+    .t-desc   { fill: #5F6B7A; font-size: 9px; }
+    .t-note   { fill: #8B5CF6; font-size: 9px; font-style: italic; }
+    .t-legend { fill: #5F6B7A; font-size: 10px; }
+    .card     { fill: #FFFFFF; stroke: #D5DBE1; stroke-width: 1; }
+    .box      { fill: none; stroke-width: 1.5; }
+    .box-cloud{ stroke: #232F3E; }
+    .box-reg  { stroke: #00A1C9; stroke-dasharray: 6 4; }
+    .box-vpc  { stroke: #8C4FFF; }
+    .box-az   { stroke: #00A1C9; stroke-dasharray: 4 4; }
+    .box-pub  { stroke: #7AA116; fill: #7AA116; fill-opacity: .05; }
+    .box-app  { stroke: #00A4A6; fill: #00A4A6; fill-opacity: .05; }
+    .box-data { stroke: #C925D1; fill: #C925D1; fill-opacity: .05; }
+    .box-ext  { stroke: #8B96A3; stroke-dasharray: 5 4; }
+    .box-mgd  { stroke: #ED7100; stroke-dasharray: 5 4; }
+    .flow     { stroke: #16191F; stroke-width: 1.6; fill: none; }
+    .flow-d   { stroke: #8B5CF6; stroke-width: 1.6; fill: none; stroke-dasharray: 5 3; }
+    .badge    { fill: #DD344C; }
+    .badge-t  { fill: #FFFFFF; font-size: 8px; font-weight: 700; }
+    .spot     { fill: #ED7100; }
+
+    @media (prefers-color-scheme: dark) {
+      .canvas  { fill: #0D1117; }
+      .t-title { fill: #E6EDF3; }
+      .t-name  { fill: #E6EDF3; }
+      .t-sub, .t-zone, .t-desc, .t-legend { fill: #8B949E; }
+      .card    { fill: #161B22; stroke: #30363D; }
+      .box-cloud { stroke: #8B949E; }
+      .flow    { stroke: #E6EDF3; }
+    }
+  </style>
+
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/>
+    </marker>
+  </defs>
+
+  <rect class="canvas" width="1440" height="1120"/>
+
+  <text class="t-title" x="24" y="30">AI Agent Platform on AWS</text>
+  <text class="t-sub" x="24" y="47">Milestone 1 — initial architecture · single region, two Availability Zones · Spot where interruption is free, state where it survives</text>
+
+  <!-- ============ EXTERNAL ============ -->
+  <rect class="box box-ext" x="24" y="60" width="1392" height="72" rx="6"/>
+  <text class="t-zone" x="1400" y="76" text-anchor="end">EXTERNAL</text>
+
+  <g transform="translate(112,66)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#8B96A3"/>
+    <text class="t-name" x="46" y="26">Webhook / API callers</text>
+    <text class="t-desc" x="46" y="41">inbound HTTPS</text>
+  </g>
+
+  <g transform="translate(300,66)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#8B96A3"/>
+    <text class="t-name" x="46" y="26">Chat channels</text>
+    <text class="t-desc" x="46" y="41">Slack · WhatsApp · Telegram</text>
+  </g>
+
+  <g transform="translate(560,66)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#8B96A3"/>
+    <text class="t-name" x="46" y="26">Schedules · SaaS events</text>
+    <text class="t-desc" x="46" y="41">to EventBridge</text>
+  </g>
+
+  <!-- ============ AWS CLOUD ============ -->
+  <rect class="box box-cloud" x="24" y="148" width="1392" height="874" rx="6"/>
+  <text class="t-zone" x="42" y="170">AWS CLOUD</text>
+
+  <rect class="box box-reg" x="44" y="186" width="1352" height="814" rx="6"/>
+  <text class="t-zone" x="60" y="208">REGION — single-region, multi-AZ</text>
+
+  <!-- VPC -->
+  <rect class="box box-vpc" x="64" y="226" width="980" height="734" rx="6"/>
+  <text class="t-zone" x="78" y="248">VPC  10.0.0.0/16</text>
+
+  <!-- AZ A -->
+  <rect class="box box-az" x="82" y="264" width="470" height="556" rx="4"/>
+  <text class="t-zone" x="96" y="286">Availability Zone A  —  agent plane</text>
+
+  <rect class="box box-pub" x="96" y="298" width="442" height="86" rx="4"/>
+  <text class="t-desc" x="530" y="314" text-anchor="end">Public subnet  10.0.0.0/20</text>
+  <g transform="translate(112,320)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#8C4FFF"/>
+    <text class="t-name" x="46" y="26">Application LB</text>
+    <text class="t-desc" x="46" y="41">spans both AZs</text>
+  </g>
+
+  <rect class="box box-app" x="96" y="396" width="442" height="176" rx="4"/>
+  <text class="t-desc" x="530" y="412" text-anchor="end">Private-app subnet  10.0.32.0/20</text>
+
+  <g transform="translate(112,420)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <text class="t-name" x="46" y="26">n8n main</text>
+    <text class="t-desc" x="46" y="41">On-Demand · Graviton</text>
+  </g>
+
+  <g transform="translate(300,420)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <text class="t-name" x="46" y="26">OpenClaw Gateway</text>
+    <text class="t-desc" x="46" y="41">On-Demand · singleton</text>
+    <rect class="badge" x="118" y="6" width="44" height="13" rx="6"/>
+    <text class="badge-t" x="140" y="16" text-anchor="middle">0 INGRESS</text>
+  </g>
+
+  <g transform="translate(112,490)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <text class="t-name" x="46" y="26">n8n workers</text>
+    <text class="t-desc" x="46" y="41">EC2 · stateless</text>
+    <rect class="spot" x="130" y="6" width="32" height="13" rx="6"/>
+    <text class="badge-t" x="146" y="16" text-anchor="middle">SPOT</text>
+  </g>
+
+  <g transform="translate(300,490)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#DD344C"/>
+    <text class="t-name" x="46" y="26">Tool sandbox</text>
+    <text class="t-desc" x="46" y="41">Docker · no creds, no IMDS</text>
+  </g>
+
+  <rect class="box box-data" x="96" y="590" width="442" height="200" rx="4"/>
+  <text class="t-desc" x="530" y="606" text-anchor="end">Private-data subnet  10.0.64.0/20  —  no route to internet</text>
+
+  <g transform="translate(112,614)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#C925D1"/>
+    <text class="t-name" x="46" y="26">RDS PostgreSQL</text>
+    <text class="t-desc" x="46" y="41">Multi-AZ primary</text>
+  </g>
+
+  <g transform="translate(300,614)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#C925D1"/>
+    <text class="t-name" x="46" y="26">ElastiCache Redis</text>
+    <text class="t-desc" x="46" y="41">n8n queue</text>
+  </g>
+
+  <g transform="translate(112,684)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#7AA116"/>
+    <text class="t-name" x="46" y="26">EFS mount target</text>
+    <text class="t-desc" x="46" y="41">Gateway state · regional</text>
+  </g>
+
+  <text class="t-note" x="300" y="700">Gateway ASG min=max=1</text>
+  <text class="t-note" x="300" y="712">spans both AZs.</text>
+  <text class="t-note" x="300" y="724">EFS is regional, so the</text>
+  <text class="t-note" x="300" y="736">relaunch target is AZ B.</text>
+
+  <!-- AZ B -->
+  <rect class="box box-az" x="572" y="264" width="470" height="556" rx="4"/>
+  <text class="t-zone" x="586" y="286">Availability Zone B  —  inference plane</text>
+
+  <rect class="box box-pub" x="586" y="298" width="442" height="86" rx="4"/>
+  <text class="t-desc" x="596" y="314">Public subnet  10.0.16.0/20</text>
+  <g transform="translate(602,320)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#8C4FFF"/>
+    <text class="t-name" x="46" y="26">NAT Gateway</text>
+    <text class="t-desc" x="46" y="41">one per AZ in prod</text>
+  </g>
+
+  <rect class="box box-app" x="586" y="396" width="442" height="176" rx="4"/>
+  <text class="t-desc" x="596" y="412">Private-app subnet  10.0.48.0/20</text>
+
+  <g transform="translate(602,420)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <text class="t-name" x="46" y="26">n8n workers</text>
+    <text class="t-desc" x="46" y="41">EC2 · stateless</text>
+    <rect class="spot" x="130" y="6" width="32" height="13" rx="6"/>
+    <text class="badge-t" x="146" y="16" text-anchor="middle">SPOT</text>
+  </g>
+
+  <g transform="translate(790,420)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <text class="t-name" x="46" y="26">Model Gateway</text>
+    <text class="t-desc" x="46" y="41">OpenAI-compatible seam</text>
+  </g>
+
+  <g transform="translate(602,490)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#01A88D"/>
+    <text class="t-name" x="46" y="26">Ollama · GPU</text>
+    <text class="t-desc" x="46" y="41">scale-to-zero · g5/g6</text>
+    <rect class="spot" x="130" y="6" width="32" height="13" rx="6"/>
+    <text class="badge-t" x="146" y="16" text-anchor="middle">SPOT</text>
+  </g>
+
+  <rect class="box box-data" x="586" y="590" width="442" height="200" rx="4"/>
+  <text class="t-desc" x="596" y="606">Private-data subnet  10.0.80.0/20</text>
+
+  <g transform="translate(602,614)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#C925D1"/>
+    <text class="t-name" x="46" y="26">RDS PostgreSQL</text>
+    <text class="t-desc" x="46" y="41">Multi-AZ standby</text>
+  </g>
+
+  <g transform="translate(790,614)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#C925D1"/>
+    <text class="t-name" x="46" y="26">ElastiCache replica</text>
+    <text class="t-desc" x="46" y="41">automatic failover</text>
+  </g>
+
+  <g transform="translate(602,684)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#7AA116"/>
+    <text class="t-name" x="46" y="26">EFS mount target</text>
+    <text class="t-desc" x="46" y="41">same file system</text>
+  </g>
+
+  <!-- VPC endpoints -->
+  <rect class="box box-ext" x="82" y="838" width="960" height="100" rx="4"/>
+  <text class="t-zone" x="96" y="858">VPC ENDPOINTS — keep traffic off the internet and off the NAT meter</text>
+
+  <g transform="translate(96,866)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#4D27AA"/>
+    <text class="t-name" x="46" y="26">CloudWatch Logs</text>
+    <text class="t-desc" x="46" y="41">interface</text>
+  </g>
+  <g transform="translate(284,866)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#DD344C"/>
+    <text class="t-name" x="46" y="26">Secrets Manager</text>
+    <text class="t-desc" x="46" y="41">interface</text>
+  </g>
+  <g transform="translate(472,866)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#4D27AA"/>
+    <text class="t-name" x="46" y="26">Systems Manager</text>
+    <text class="t-desc" x="46" y="41">interface · no SSH</text>
+  </g>
+  <g transform="translate(660,866)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#01A88D"/>
+    <text class="t-name" x="46" y="26">bedrock-runtime</text>
+    <text class="t-desc" x="46" y="41">interface · stays in VPC</text>
+  </g>
+  <g transform="translate(848,866)">
+    <rect class="card" width="168" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#7AA116"/>
+    <text class="t-name" x="46" y="26">S3 · Gateway EP</text>
+    <text class="t-desc" x="46" y="41">free · weights, no NAT</text>
+  </g>
+
+  <!-- MANAGED SERVICES -->
+  <rect class="box box-mgd" x="1064" y="264" width="312" height="674" rx="6"/>
+  <text class="t-zone" x="1080" y="286">MANAGED — no capacity to run</text>
+
+  <g transform="translate(1084,300)">
+    <rect class="card" width="272" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#01A88D"/>
+    <text class="t-name" x="46" y="26">Amazon Bedrock</text>
+    <text class="t-desc" x="46" y="41">default inference · Ollama's backstop</text>
+  </g>
+  <g transform="translate(1084,364)">
+    <rect class="card" width="272" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#7AA116"/>
+    <text class="t-name" x="46" y="26">Amazon S3</text>
+    <text class="t-desc" x="46" y="41">model weights · artifacts · log archive</text>
+  </g>
+  <g transform="translate(1084,428)">
+    <rect class="card" width="272" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#E7157B"/>
+    <text class="t-name" x="46" y="26">Amazon EventBridge</text>
+    <text class="t-desc" x="46" y="41">the platform's nervous system</text>
+  </g>
+  <g transform="translate(1084,492)">
+    <rect class="card" width="272" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#ED7100"/>
+    <text class="t-name" x="46" y="26">AWS Lambda</text>
+    <text class="t-desc" x="46" y="41">scaler · spot-drain · router · metering</text>
+  </g>
+  <g transform="translate(1084,556)">
+    <rect class="card" width="272" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#E7157B"/>
+    <text class="t-name" x="46" y="26">Amazon SQS</text>
+    <text class="t-desc" x="46" y="41">buffers the GPU cold start</text>
+  </g>
+  <g transform="translate(1084,620)">
+    <rect class="card" width="272" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#4D27AA"/>
+    <text class="t-name" x="46" y="26">Amazon CloudWatch</text>
+    <text class="t-desc" x="46" y="41">agent_run_id traces · token &amp; cost metrics</text>
+  </g>
+  <g transform="translate(1084,684)">
+    <rect class="card" width="272" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#DD344C"/>
+    <text class="t-name" x="46" y="26">Secrets Manager · IAM</text>
+    <text class="t-desc" x="46" y="41">per-component roles · no long-lived keys</text>
+  </g>
+  <g transform="translate(1084,748)">
+    <rect class="card" width="272" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#4D27AA"/>
+    <text class="t-name" x="46" y="26">SSM Parameter Store</text>
+    <text class="t-desc" x="46" y="41">cross-stack contract · AMI IDs · routing</text>
+  </g>
+  <g transform="translate(1084,812)">
+    <rect class="card" width="272" height="58" rx="6"/>
+    <rect x="10" y="16" width="26" height="26" rx="4" fill="#4D27AA"/>
+    <text class="t-name" x="46" y="26">AWS CloudFormation</text>
+    <text class="t-desc" x="46" y="41">nested stacks, layered by rate of change</text>
+  </g>
+
+  <!-- ============ FLOWS ============ -->
+  <!-- 1: webhook -> ALB -->
+  <path class="flow" d="M 196 124 L 196 314" marker-end="url(#ah)"/>
+  <!-- 2: chat channels -> Gateway (outbound-initiated) -->
+  <path class="flow-d" d="M 360 124 L 360 414" marker-end="url(#ah)"/>
+  <text class="t-note" x="392" y="206">outbound-initiated:</text>
+  <text class="t-note" x="392" y="218">the Gateway dials out,</text>
+  <text class="t-note" x="392" y="230">so it needs no ingress</text>
+  <!-- 3: ALB -> n8n main -->
+  <path class="flow" d="M 196 378 L 196 414" marker-end="url(#ah)"/>
+  <!-- 4: n8n main -> workers -->
+  <path class="flow" d="M 196 478 L 196 484" marker-end="url(#ah)"/>
+  <!-- 5: Gateway -> sandbox -->
+  <path class="flow" d="M 384 478 L 384 484" marker-end="url(#ah)"/>
+  <!-- 6: inference bus — n8n workers (A) and the Gateway both feed the Model Gateway -->
+  <path class="flow" d="M 196 548 L 196 560 L 900 560 L 900 484" marker-end="url(#ah)"/>
+  <!-- 7: Gateway joins the bus -->
+  <path class="flow" d="M 468 449 L 490 449 L 490 560"/>
+  <!-- 7b: workers (B) -> Model Gateway -->
+  <path class="flow" d="M 770 449 L 784 449" marker-end="url(#ah)"/>
+  <!-- 8: Model Gateway -> Bedrock -->
+  <path class="flow" d="M 958 449 L 1010 449 L 1010 329 L 1078 329" marker-end="url(#ah)"/>
+  <!-- 9: Model Gateway -> Ollama -->
+  <path class="flow" d="M 830 478 L 830 484 L 686 484 L 686 490" marker-end="url(#ah)"/>
+  <!-- 11: EventBridge -> Lambda -->
+  <path class="flow" d="M 1220 486 L 1220 492" marker-end="url(#ah)"/>
+  <!-- 12: Lambda -> Ollama ASG (scale from zero) -->
+  <path class="flow" d="M 1078 521 L 774 521" marker-end="url(#ah)"/>
+  <text class="t-note" x="782" y="534">scale from zero</text>
+  <text class="t-note" x="782" y="546">on queue depth</text>
+
+  <!-- ============ LEGEND ============ -->
+  <text class="t-zone" x="24" y="1046">LEGEND</text>
+
+  <rect x="96" y="1036" width="12" height="12" rx="2" fill="#ED7100"/>
+  <text class="t-legend" x="114" y="1046">Compute</text>
+  <rect x="176" y="1036" width="12" height="12" rx="2" fill="#8C4FFF"/>
+  <text class="t-legend" x="194" y="1046">Networking</text>
+  <rect x="268" y="1036" width="12" height="12" rx="2" fill="#7AA116"/>
+  <text class="t-legend" x="286" y="1046">Storage</text>
+  <rect x="344" y="1036" width="12" height="12" rx="2" fill="#C925D1"/>
+  <text class="t-legend" x="362" y="1046">Database</text>
+  <rect x="424" y="1036" width="12" height="12" rx="2" fill="#DD344C"/>
+  <text class="t-legend" x="442" y="1046">Security</text>
+  <rect x="500" y="1036" width="12" height="12" rx="2" fill="#E7157B"/>
+  <text class="t-legend" x="518" y="1046">App integration</text>
+  <rect x="608" y="1036" width="12" height="12" rx="2" fill="#4D27AA"/>
+  <text class="t-legend" x="626" y="1046">Management</text>
+  <rect x="708" y="1036" width="12" height="12" rx="2" fill="#01A88D"/>
+  <text class="t-legend" x="726" y="1046">AI / ML</text>
+
+  <path class="flow" d="M 800 1042 L 838 1042" marker-end="url(#ah)"/>
+  <text class="t-legend" x="846" y="1046">request / data flow</text>
+  <path class="flow-d" d="M 960 1042 L 998 1042" marker-end="url(#ah)"/>
+  <text class="t-legend" x="1006" y="1046">outbound-initiated connection</text>
+
+  <text class="t-legend" x="24" y="1074">SPOT = interruptible, stateless, retryable.  0 INGRESS = security group has no inbound rules; administration via SSM Session Manager.</text>
+  <text class="t-legend" x="24" y="1092">Bedrock is both the default for interactive inference and the fallback when Spot GPU capacity is unavailable — so a capacity shortfall raises the bill, not an outage.</text>
+  <text class="t-legend" x="24" y="1110">Diagram is illustrative and uses an approximation of the AWS category palette, not the official AWS icon set. See docs/architecture/ for the authoritative design.</text>
+</svg>
