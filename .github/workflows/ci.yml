@@ -14,12 +14,8 @@ concurrency:
 
 jobs:
   test:
-    name: Test on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+    name: Test
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +29,17 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+
+      # The tests never shell out to git and never touch the network, so running
+      # them on a second operating system would exercise the same standard
+      # library twice. Only terminal-width detection is platform-specific, and
+      # that is a compile-time concern: this type-checks the other side of the
+      # build tag in width_other.go, tests included, for the cost of one step.
+      # `make dist` in the release workflow cross-compiles the real binaries.
+      - name: Type-check the non-Unix build
+        env:
+          GOOS: windows
+        run: go vet ./...
 
   lint:
     name: Format and vet
