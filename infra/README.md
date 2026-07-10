@@ -246,10 +246,13 @@ quota is zero or too low — common on new accounts. Two fixes:
   `AWS_PURCHASE_OPTION` to `on-demand`. Switch back to Spot once the quota
   increase is approved.
 
-**A stack is `ROLLBACK_COMPLETE` / `CREATE_FAILED`.** CloudFormation rolls a
-failed stack back but leaves earlier stacks up. Fix the cause and re-run
-`make deploy` (it is idempotent), or `make delete` to tear everything down (the
-artifact bucket is retained).
+**A stack is `ROLLBACK_COMPLETE` / `CREATE_FAILED`.** A create that fails leaves
+the stack in a state CloudFormation cannot update, so it must be deleted before
+it can be recreated. `make deploy` now does this for you: before deploying each
+stack it checks the state and deletes a wedged one first (healthy, absent, and
+in-progress stacks are left alone). So just fix the cause and re-run
+`make deploy`; use `make delete` only to tear everything down (the artifact
+bucket is retained).
 
 ## Validation & limitations
 
