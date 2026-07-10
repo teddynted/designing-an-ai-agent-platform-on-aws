@@ -111,9 +111,15 @@ templates into GitHub Actions.
 - **Validation** runs on every pull request and push that touches `infra/`. It
   lints every template with `cfn-lint` and checks that each cross-stack import
   has a matching export. It needs no AWS credentials.
-- **Deployment** is manual: trigger the workflow from the Actions tab, choose an
-  environment, and type `deploy` to confirm. The job assumes an IAM role over
-  OIDC — there are no long-lived secrets.
+- **`dev` deploys automatically** when infra changes land on `main`: once a pull
+  request merges, the workflow validates and then deploys the `dev` environment
+  with no further action.
+- **`staging` and `prod` stay manual**: trigger the workflow from the Actions
+  tab, choose the environment, and type `deploy` to confirm — so a promotion is
+  never a one-click accident.
+
+Every deploy assumes an IAM role over OIDC; there are no long-lived secrets.
+Pull requests never deploy — they only validate.
 
 ### One-time deploy setup
 

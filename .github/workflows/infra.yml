@@ -1,8 +1,10 @@
 name: Infrastructure
 
-# Validates the CloudFormation templates on every change, and offers a manual,
-# environment-gated path to deploy them. Validation needs no AWS credentials;
-# deployment assumes a role over OIDC and never uses long-lived secrets.
+# Validates the CloudFormation templates on every change, deploys the dev
+# environment automatically when infra changes land on main, and keeps a manual,
+# environment-gated path for staging and prod. Validation needs no AWS
+# credentials; deployment assumes a role over OIDC and never uses long-lived
+# secrets.
 on:
   push:
     branches: [main]
@@ -29,7 +31,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: infra-${{ github.ref }}-${{ github.event.inputs.environment || 'validate' }}
+  # Serialise runs per ref so two deployments never race the same stacks.
+  group: infra-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -87,16 +90,23 @@ jobs:
   #     to prod for a manual approval gate)
   # ---------------------------------------------------------------------------
   deploy:
-    name: Deploy (${{ github.event.inputs.environment }})
+    name: Deploy (${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'dev' }})
+    # Runs automatically when infra changes land on main (deploying dev), and
+    # manually via Run workflow for any environment (guarded by the confirm
+    # word, so staging and prod are never a one-click accident).
     if: >-
-      github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.confirm == 'deploy'
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'deploy')
     needs: validate
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment }}
+    # dev on push; the chosen environment on manual dispatch. Environment
+    # protection rules (e.g. required reviewers on prod) still apply.
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'dev' }}
     permissions:
       id-token: write   # required to request the OIDC token
       contents: read
+    env:
+      TARGET_ENV: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'dev' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -107,13 +117,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Deploy all stacks
-        run: >-
-          make -C infra deploy
-          ENV=${{ github.event.inputs.environment }}
-          REGION=${{ vars.AWS_REGION }}
+        run: make -C infra deploy ENV="$TARGET_ENV" REGION="${{ vars.AWS_REGION }}"
 
       - name: Show stack outputs
-        run: >-
-          make -C infra outputs
-          ENV=${{ github.event.inputs.environment }}
-          REGION=${{ vars.AWS_REGION }}
+        run: make -C infra outputs ENV="$TARGET_ENV" REGION="${{ vars.AWS_REGION }}"
