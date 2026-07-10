@@ -38,8 +38,8 @@ if [[ -z "$configured" ]]; then
 
        make -C infra bootstrap
 
-   Validation runs without it; only the manual deploy job needs it. This notice
-   appears once and does not block your push.
+   Validation runs without it; only the deploy job needs it. This notice appears
+   once and does not block your push.
 
 MSG
 fi
