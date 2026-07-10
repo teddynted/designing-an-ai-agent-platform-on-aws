@@ -36,7 +36,7 @@
 
   <!-- Region -->
   <rect x="214" y="138" width="858" height="678" rx="10" fill="none" stroke="#00A4A6" stroke-width="1.4" stroke-dasharray="6 4"/>
-  <text x="230" y="160" font-size="12" fill="#00838A" font-weight="700">Region · eu-west-1</text>
+  <text x="230" y="160" font-size="12" fill="#00838A" font-weight="700">Region · us-east-1</text>
 
   <!-- ============ REGIONAL SERVERLESS SERVICES ============ -->
   <!-- EventBridge (Application Integration = pink) -->
