@@ -103,6 +103,30 @@ aws cloudformation deploy \
   --region eu-west-1
 ```
 
+## Continuous integration & deployment
+
+[`.github/workflows/infra.yml`](../.github/workflows/infra.yml) wires these
+templates into GitHub Actions.
+
+- **Validation** runs on every pull request and push that touches `infra/`. It
+  lints every template with `cfn-lint` and checks that each cross-stack import
+  has a matching export. It needs no AWS credentials.
+- **Deployment** is manual: trigger the workflow from the Actions tab, choose an
+  environment, and type `deploy` to confirm. The job assumes an IAM role over
+  OIDC — there are no long-lived secrets.
+
+Deployment requires one-time setup:
+
+1. Create an IAM OIDC identity provider for `token.actions.githubusercontent.com`.
+2. Create a deploy role that trusts this repository, and set its ARN as the
+   repository (or environment) variable `AWS_DEPLOY_ROLE_ARN`.
+3. Set the target region as the variable `AWS_REGION`.
+4. Create GitHub environments `dev`, `staging`, and `prod`; add required
+   reviewers to `prod` for a manual approval gate.
+
+Until that is configured, the validation job still runs and the deploy job is
+simply never triggered.
+
 ## Parameters
 
 Every environment-specific value is a parameter; nothing is hard-coded. Defaults
