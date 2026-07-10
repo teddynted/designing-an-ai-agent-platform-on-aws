@@ -140,8 +140,25 @@ is worth more than one that restates the implementation:
   the version it came from.
 - `TestStatisticsMatchesGroups` — the statistics and the rendered sections are
   derived from the same classification, so they cannot disagree.
+- `TestSummaryNeverQuotesCommitText` — the summary is counted, never
+  paraphrased, which is the only reason it can be trusted.
 - `TestTableIgnoresValueLength` — a long repository name must not shift the
-  columns of the release plan.
+  columns of the release report.
+- `TestFailurePreservesStructure` — an error's paths and remedies must survive
+  word-wrapping.
+
+### Golden files
+
+The report and the rendered notes are pinned by golden files in
+`cmd/release/testdata`, so that an accidental change to spacing, ordering, or
+wording shows up as a diff in review rather than in a published release.
+
+```bash
+go test ./cmd/release -update   # rewrite the golden files
+git diff cmd/release/testdata   # then read what changed, and why
+```
+
+Regenerating without reading the diff defeats the point of having them.
 
 ## Pull requests
 

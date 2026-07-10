@@ -5,17 +5,17 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/changelog"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/release"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/semver"
 )
 
-// bumpCommand implements `release major|minor|patch`: validate, calculate,
-// confirm, tag, push.
+// bumpCommand implements `release major|minor|patch`.
+//
+// It reads as the report does: validate, plan, describe, confirm, apply. Each
+// step appends to the report and the stopwatch; none of them format anything
+// themselves.
 func bumpCommand(ctx context.Context, bump semver.Bump, args []string) error {
 	fs := flag.NewFlagSet(bump.String(), flag.ContinueOnError)
 	fs.Usage = func() {
@@ -32,48 +32,69 @@ func bumpCommand(ctx context.Context, bump semver.Bump, args []string) error {
 		return fmt.Errorf("%w: unexpected argument %q", errUsage, fs.Arg(0))
 	}
 
-	p := newPrinter(os.Stdout, os.Stderr, useColor(opts.noColor, os.Stderr))
+	p := newPrinter(os.Stdout, os.Stderr, opts.printerOptions(os.Stderr))
 	svc := release.New(opts.config())
+	watch := newStopwatch()
+
+	p.debugf("remote=%s tag-prefix=%q dir=%q dry-run=%v", opts.remote, opts.tagPrefix, opts.dir, opts.dryRun)
 
 	if opts.dryRun {
 		p.dryRunBanner()
-		p.blank()
 	}
 
-	p.info("Validating the repository")
+	// Validation. Health describes every problem at once; Plan then enforces
+	// the ones that block a release, and explains how to fix them.
+	p.verbosef("inspecting the repository")
+	health, err := svc.Health(ctx)
+	if err != nil {
+		return err
+	}
+	if opts.verifyAuth {
+		p.verbosef("verifying GITHUB_TOKEN against the GitHub API")
+		health = replaceCheck(health, verifyAuthentication(ctx))
+	}
+	printHealth(p, health)
+	watch.lap("Validation")
+
+	p.verbosef("calculating the next version")
 	plan, err := svc.Plan(ctx, bump, opts.prerelease)
 	if err != nil {
 		return err
 	}
-	p.success("Preflight checks passed")
-	p.blank()
+	watch.lap("Version calculation")
+	p.debugf("previous=%q next=%s commits=%d", plan.PreviousTag, plan.Tag, len(plan.Commits))
 
-	stats := changelog.NewData(plan.Release(), opts.categories()).Stats
-
-	printPlan(p, plan)
-	p.blank()
+	printPlan(p, plan, opts.remote)
+	printVersion(p, plan)
 	printActions(p, plannedActions(plan, &opts), opts.dryRun)
-	p.blank()
-	printStatistics(p, stats)
+
+	rel := plan.Release()
+	printStatistics(p, changelog.NewData(rel, opts.categories()).Stats, plan.Diff)
+	printContributors(p, plan.Contributors())
+
+	p.verbosef("rendering the release notes")
+	notes, err := opts.renderNotes(rel)
+	if err != nil {
+		return err
+	}
+	watch.lap("Release notes")
+
+	// Show the notes whenever a person is watching: before a dry run ends, and
+	// before the prompt that publishes them for real.
+	interactive := !opts.yes && isTerminal(os.Stdin) && isTerminal(os.Stderr)
+	if opts.dryRun || interactive {
+		printNotes(p, notes)
+	}
+
+	printConfidence(p, health)
 
 	if opts.dryRun {
-		p.blank()
-		p.heading("Release notes preview")
-
-		notes, err := opts.renderNotes(plan.Release())
-		if err != nil {
-			return err
-		}
-		fmt.Fprint(p.out, notes)
-
-		p.blank()
-		p.warn("Dry run: nothing was created, pushed, or published")
+		printTiming(p, watch)
+		printDryRunSummary(p, plan, &opts, bump)
 		return nil
 	}
 
-	// Prompting only makes sense when a human is watching. In CI, or when the
-	// output is piped, --yes is implied.
-	if !opts.yes && isTerminal(os.Stdin) && isTerminal(os.Stderr) {
+	if interactive {
 		p.blank()
 		question := fmt.Sprintf("Create and push %s?", plan.Tag)
 		if opts.noPush {
@@ -87,49 +108,22 @@ func bumpCommand(ctx context.Context, bump semver.Bump, args []string) error {
 			return errAborted
 		}
 	}
-	p.blank()
 
+	p.section("Releasing")
+	p.verbosef("creating the tag and pushing it to %s", opts.remote)
 	if err := svc.Apply(ctx, plan, !opts.noPush); err != nil {
 		return err
 	}
+	watch.lap("Git operations")
+
 	p.success("Created annotated tag %s", plan.Tag)
-
-	if opts.noPush {
-		p.warn("The tag was not pushed")
-		p.note("Push it with: git push %s %s", opts.remote, plan.Tag)
-		return nil
+	if !opts.noPush {
+		p.success("Pushed %s to %s", plan.Tag, opts.remote)
 	}
 
-	p.success("Pushed %s to %s", plan.Tag, opts.remote)
-	p.blank()
-	p.info("GitHub Actions will now generate the changelog and publish the release")
-	if plan.Repo.Known() {
-		p.note("Watch it at https://%s/%s/%s/actions", plan.Repo.Host, plan.Repo.Owner, plan.Repo.Name)
-	}
+	printTiming(p, watch)
+	printReleaseSummary(p, plan, &opts)
 	return nil
-}
-
-// printPlan renders the summary block a user reads before confirming.
-func printPlan(p *printer, plan *release.Plan) {
-	p.heading("Release plan")
-
-	rows := make([]row, 0, 6)
-	if plan.Repo.Known() {
-		rows = append(rows, row{label: "Repository", value: plan.Repo.Owner + "/" + plan.Repo.Name})
-	}
-	rows = append(rows, row{label: "Branch", value: plan.Branch})
-
-	current := plan.PreviousTag
-	if plan.IsFirstRelease() {
-		current = "none, this is the first release"
-	}
-	rows = append(rows,
-		row{label: "Current", value: current},
-		row{label: "Next", value: fmt.Sprintf("%s (%s)", plan.Tag, plan.Bump), bold: true},
-		row{label: "Commits", value: strconv.Itoa(len(plan.Commits))},
-		row{label: "Release Date", value: plan.Date.Format(time.DateOnly)},
-	)
-	p.table(rows)
 }
 
 // plannedActions lists what the release will do, in order, phrased as lower-case
@@ -151,50 +145,47 @@ func plannedActions(plan *release.Plan, opts *releaseFlags) []string {
 	)
 }
 
-func printActions(p *printer, actions []string, dryRun bool) {
-	p.heading("Planned Actions")
-	for _, action := range actions {
-		if dryRun {
-			p.bullet("Would %s", action)
-		} else {
-			p.success("%s", capitalise(action))
-		}
+// printDryRunSummary closes a dry run by saying plainly that nothing happened,
+// and giving the exact command that would make it happen.
+func printDryRunSummary(p *printer, plan *release.Plan, opts *releaseFlags, bump semver.Bump) {
+	p.section("Summary")
+	p.success("Dry run completed successfully")
+	p.blank()
+	p.note("No tag was created. Nothing was pushed. Nothing was published.")
+	p.blank()
+	p.plain("  Run:")
+	p.blank()
+	p.plain("      %s", p.paint(ansiBold, opts.commandLine(bump)))
+	p.blank()
+	p.plain("  to publish %s.", plan.Tag)
+}
+
+// printReleaseSummary closes a real release with what happened and what happens
+// next.
+func printReleaseSummary(p *printer, plan *release.Plan, opts *releaseFlags) {
+	p.section("Summary")
+
+	if opts.noPush {
+		p.warn("%s exists locally but was not pushed", plan.Tag)
+		p.blank()
+		p.note("Push it with: git push %s %s", opts.remote, plan.Tag)
+		return
+	}
+
+	p.success("Released %s", plan.Tag)
+	p.blank()
+	p.note("GitHub Actions will now generate the changelog and publish the release.")
+	if plan.Repo.Known() {
+		p.note("Watch it at https://%s/%s/%s/actions", plan.Repo.Host, plan.Repo.Owner, plan.Repo.Name)
 	}
 }
 
-// printStatistics summarises the release by category. Categories with no commits
-// are omitted rather than shown as zero.
-func printStatistics(p *printer, stats changelog.Stats) {
-	p.heading("Release Statistics")
-
-	rows := make([]row, 0, len(stats.Counts)+3)
-	if stats.Bump != "" {
-		rows = append(rows, row{label: "Version Bump", value: capitalise(stats.Bump)})
-	}
-	rows = append(rows, row{label: "Commits", value: strconv.Itoa(stats.Commits)})
-	if stats.Breaking > 0 {
-		rows = append(rows, row{label: "Breaking", value: strconv.Itoa(stats.Breaking), bold: true})
-	}
-	for _, c := range stats.Counts {
-		rows = append(rows, row{label: c.Label, value: strconv.Itoa(c.N)})
-	}
-	p.table(rows)
-}
-
-// capitalise upper-cases the first letter of an ASCII phrase.
-func capitalise(s string) string {
-	if s == "" {
-		return s
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
-}
-
-// checkCommand implements `release check`: the preflight validations on their
-// own, for use as a pre-release sanity check or a CI guard.
+// checkCommand implements `release check`: the health report on its own, for use
+// as a pre-release sanity check or a CI guard.
 func checkCommand(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "Usage: go run ./cmd/release check [flags]\n\nRun the release preflight validations without tagging anything.\n\nFlags:\n")
+		fmt.Fprint(os.Stderr, "Usage: go run ./cmd/release check [flags]\n\nReport on the repository's readiness to publish a release.\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 
@@ -204,29 +195,36 @@ func checkCommand(ctx context.Context, args []string) error {
 		return err
 	}
 
-	p := newPrinter(os.Stdout, os.Stderr, useColor(opts.noColor, os.Stderr))
+	p := newPrinter(os.Stdout, os.Stderr, opts.printerOptions(os.Stderr))
 	svc := release.New(opts.config())
 
-	branch, err := svc.Check(ctx)
+	health, err := svc.Health(ctx)
 	if err != nil {
 		return err
 	}
-	p.success("Inside a git repository")
-	p.success("On a release branch: %s", branch)
-	if opts.allowDirty {
-		p.warn("Working tree check skipped by --allow-dirty")
-	} else {
-		p.success("Working tree is clean")
+	if opts.verifyAuth {
+		health = replaceCheck(health, verifyAuthentication(ctx))
 	}
+	printHealth(p, health)
 
 	latest, err := svc.LatestTag(ctx)
 	if err != nil {
 		return err
 	}
+
+	p.section("Version Information")
 	if latest == "" {
-		p.success("No release tags yet; the next release will be the first")
+		p.table([]row{{label: "Current Version", value: "none, the next release will be the first"}})
 	} else {
-		p.success("Latest release tag: %s", latest)
+		p.table([]row{{label: "Current Version", value: latest}})
+	}
+
+	printConfidence(p, health)
+
+	// `check` reports; it does not decide. A failing check still exits non-zero
+	// so that CI can gate on it.
+	if health.Failures() > 0 {
+		return fmt.Errorf("%d of %d checks failed", health.Failures(), len(health.Checks))
 	}
 	return nil
 }

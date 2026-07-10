@@ -1,0 +1,13 @@
+
+Validation
+
++ Git repository - inside a Git work tree
++ Release branch - on main
++ Working tree - clean
++ Untracked files - none
++ Branch synchronised - up to date with origin/main
++ GitHub authentication - GITHUB_TOKEN is set
+
+Release Confidence
+
++ ***** Ready to release

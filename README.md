@@ -15,17 +15,31 @@ third-party Go dependency — only the standard library.
 
 ```console
 $ go run ./cmd/release minor
-ℹ Validating the repository
-✓ Preflight checks passed
 
-Release plan
+Validation
 
-Repository      teddynted/designing-an-ai-agent-platform-on-aws
-Branch          main
-Current         v1.2.3
-Next            v1.3.0 (minor)
-Commits         12
-Release Date    2026-07-10
+✓ Git repository — inside a Git work tree
+✓ Release branch — on main
+✓ Working tree — clean
+✓ Untracked files — none
+✓ Branch synchronised — up to date with origin/main
+✓ GitHub authentication — GITHUB_TOKEN is set
+
+Release Plan
+
+Repository    teddynted/designing-an-ai-agent-platform-on-aws
+Branch        main
+Remote        origin
+Commit        486bcb2
+
+Version Information
+
+Current Version     v1.2.3
+Next Version        v1.3.0
+Increment Type      Minor
+Previous Release    2026-07-01
+Days Since          9 days ago
+Release Date        2026-07-10
 
 Planned Actions
 
@@ -36,20 +50,44 @@ Planned Actions
 
 Release Statistics
 
-Version Bump     Minor
-Commits          12
-Features         4
-Fixes            3
-Documentation    2
-Refactors        1
-Other            2
+Total Commits       5
+Features            2
+Fixes               1
+Documentation       1
+Breaking Changes    1
+Files Changed       30
+Lines Added         +2,881
+Lines Removed       -651
+
+Contributors
+
+• Teddy Kekana (3 commits)
+• Ada Lovelace (2 commits)
+
+Release Confidence
+
+✓ ★★★★★ Ready to release
 
 Create and push v1.3.0? [y/N] y
+
+Releasing
 
 ✓ Created annotated tag v1.3.0
 ✓ Pushed v1.3.0 to origin
 
-ℹ GitHub Actions will now generate the changelog and publish the release
+Timing
+
+Validation             137ms
+Version calculation    412ms
+Release notes            3ms
+Git operations         890ms
+Total                  1.44s
+
+Summary
+
+✓ Released v1.3.0
+
+  GitHub Actions will now generate the changelog and publish the release.
 ```
 
 ## Why one binary
@@ -190,31 +228,72 @@ go run ./cmd/release minor --pre rc            # cut v1.3.0-rc.0 instead of v1.3
 go run ./cmd/release patch --no-push           # tag locally, push by hand later
 go run ./cmd/release patch --sign              # create a GPG-signed tag
 go run ./cmd/release notes --template my.tmpl  # render notes your way
+go run ./cmd/release check --verify-auth       # check GITHUB_TOKEN against the API
+go run ./cmd/release minor --verbose            # narrate each phase
+```
+
+`--verify-auth` is opt-in because cutting a tag never calls the GitHub API — the
+workflow publishes. Verifying a credential the command will not use would add a
+network dependency to an operation that otherwise works offline.
+
+## Reading the report
+
+Every release prints the same sections, in the same order. Each answers one
+question.
+
+| Section | Answers |
+| --- | --- |
+| **Validation** | Is this repository fit to release from? |
+| **Release Plan** | Where is the release being cut from? |
+| **Version Information** | What version, from what, and how long has it been? |
+| **Planned Actions** | What is about to happen? |
+| **Release Statistics** | What does the release contain? |
+| **Contributors** | Who worked on it? |
+| **Release Notes Preview** | What will be published? |
+| **Release Confidence** | Should this go out? |
+| **Timing** | Where did the time go? |
+| **Summary** | What happened, and what next? |
+
+**Validation** reports every check at once rather than stopping at the first
+problem, so one run tells you everything to fix. A check is a failure only when
+it blocks a release: a missing `GITHUB_TOKEN` is a warning, because the workflow
+publishes, not your terminal.
+
+**Release Confidence** is derived from those checks, never asserted. Five stars
+means every check passed; each warning costs one, to a floor of two. Every
+warning behind the rating is listed beneath it — a rating without its reasons is
+decoration.
+
+**Timing** reports what was measured, never an estimate. Predicting how long a
+push will take is guesswork, and a confidently wrong number is worse than none.
+
+The **Release Notes Preview** goes to stdout while the report goes to stderr, so
+the notes can be redirected on their own:
+
+```bash
+go run ./cmd/release minor --dry-run > notes.md
 ```
 
 ## Dry runs
 
 `--dry-run` performs every read and every calculation, then stops before the
 first write. It creates no tag, pushes nothing, and calls no API. Because a
-release is irreversible, the run says so before anything else reaches the
-screen:
+release is irreversible, it says so before anything else reaches the screen, and
+again when it finishes:
 
 ```console
 $ go run ./cmd/release minor --dry-run
-──────────────────────────────────────
+────────────────────────────────────────────────────────────────
 
 DRY RUN
 
-No Git tags will be created.
-No GitHub releases will be published.
-No repository changes will be made.
+  Nothing will be modified.
+  Nothing will be pushed.
+  Nothing will be published.
 
-──────────────────────────────────────
+────────────────────────────────────────────────────────────────
 
-ℹ Validating the repository
-✓ Preflight checks passed
-
-Release plan
+Validation
 …
 
 Planned Actions
@@ -223,21 +302,54 @@ Planned Actions
 • Would push tag to origin
 • Would generate release notes
 • Would create GitHub Release
+
+…
+
+Summary
+
+✓ Dry run completed successfully
+
+  No tag was created. Nothing was pushed. Nothing was published.
+
+  Run:
+
+      release minor
+
+  to publish v1.3.0.
 ```
 
-The action list mirrors the flags you passed. With `--no-push` it stops after
-the tag, because a tag that is never pushed triggers no workflow and produces no
+The final command is reconstructed from the flags you passed, so a dry run of
+`minor --pre rc --sign` tells you to run `release minor --pre rc --sign`.
+Presentation flags are left out, and `--dry-run` never appears.
+
+The action list mirrors those flags too. With `--no-push` it stops after the
+tag, because a tag that is never pushed triggers no workflow and produces no
 release — the list never promises work that will not happen.
 
-The dry run also prints the release notes exactly as they would be published, to
-stdout, so they can be piped or diffed while the progress output stays on
-stderr:
-
-```bash
-go run ./cmd/release minor --dry-run > notes.md
-```
-
 `release publish --dry-run` does the same for an existing tag.
+
+## Terminal output
+
+The report adapts to the terminal it is printed to.
+
+| Flag | Effect |
+| --- | --- |
+| `--ascii` | Replace the Unicode icons with `+ ! x i -` |
+| `--no-color` | Disable colour; `NO_COLOR` is honoured too |
+| `--verbose` | Narrate each phase as it runs |
+| `--debug` | Add internal diagnostics: resolved config, tag counts |
+
+Width comes from the terminal itself, or from `COLUMNS` when you export it, and
+falls back to 80 columns when the output is redirected. Long messages wrap under
+their text rather than under their icon; overlong table values are truncated
+rather than wrapped, so the columns never break.
+
+The ASCII fallback is chosen automatically when the locale is not UTF-8, so a
+terminal in the `C` locale renders markers rather than mojibake. `RELEASE_ASCII`
+forces it.
+
+Diagnostics never appear in a normal run. `--verbose` and `--debug` write to
+stderr alongside the report, and never to the generated notes.
 
 ## Release note categories
 
@@ -282,13 +394,41 @@ letter is capitalised, and a trailing full stop is dropped. So
 - **cli:** Add semantic versioning ([abc1234](https://github.com/…/commit/abc1234))
 ```
 
-The footer links to the diff, or announces a first release when there is nothing
-to compare against:
+Identical entries are deduplicated: a cherry-pick, or a commit reverted and
+reapplied, is listed once.
+
+The notes open with a one-paragraph summary and close with the contributors and
+a link to the diff:
 
 ```markdown
+This release introduces 2 new features, fixes 1 bug, and documents 1 change.
+It contains 1 breaking change, so review the notes before upgrading.
+
+## What's Changed
+…
+
+### Contributors
+
+- Teddy Kekana (3 commits)
+- Ada Lovelace (2 commits)
+
 Compare changes:
 https://github.com/teddynted/repo/compare/v1.2.3...v1.3.0
 ```
+
+The summary is **counted, never paraphrased**. It is assembled from the commit
+totals, and no commit text reaches it. A summary generated by paraphrasing
+subjects would eventually describe a release inaccurately, and nobody would
+notice before it was published — counting is dull and correct, which is the
+right trade for a release note. `TestSummaryNeverQuotesCommitText` pins that.
+
+Contributors are keyed on email, since the same person often commits under
+several spellings of their name. A commit with no author information is skipped
+rather than listed as a blank, and a release with no author information at all
+simply has no Contributors section.
+
+For a first release there is nothing to compare against, so the footer reads
+`Initial release.` instead.
 
 ### Adding or hiding a category
 
@@ -323,14 +463,17 @@ A template is executed against `changelog.Data`, whose fields are documented in
 | `.Tag`, `.Version` | `v1.3.0` and `1.3.0` |
 | `.Date` | Release date, ISO-8601 |
 | `.Bump` | `major`, `minor`, or `patch`; empty when unknown |
+| `.Summary` | The counted one-paragraph summary; empty for an empty release |
 | `.IsFirstRelease` | True when there is no previous tag |
 | `.CompareURL` | Diff against the previous tag; empty for a first release |
 | `.Groups` | Non-empty categories, Breaking Changes first |
+| `.Contributors` | Authors, most prolific first; may be empty |
 | `.Stats` | `.Commits`, `.Breaking`, and `.Counts` |
 
 Each `.Groups` element carries `.Heading`, `.Title`, `.Icon`, and `.Items`; each
 item carries `.Text` (scope and subject, ready to print), `.Link`, `.Title`,
-`.Scope`, `.ShortSHA`, `.URL`, and `.BreakingNote`.
+`.Scope`, `.ShortSHA`, `.URL`, and `.BreakingNote`. Each `.Contributors` element
+carries `.Name`, `.Email`, and `.Commits`.
 
 ```gotemplate
 # {{.Tag}} ({{.Date}})

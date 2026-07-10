@@ -1,0 +1,32 @@
+This release introduces 2 new features, fixes 1 bug, and documents 1 change. It contains 1 breaking change, so review the notes before upgrading.
+
+## What's Changed
+
+### ⚠️ Breaking Changes
+
+- Require Go 1.25 ([ccccccc](https://github.com/teddynted/repo/commit/cccccccddddddd))
+  Go 1.24 is no longer supported
+
+### 🚀 Features
+
+- **cli:** Add --dry-run ([aaaaaaa](https://github.com/teddynted/repo/commit/aaaaaaabbbbbbb))
+- Require Go 1.25 ([ccccccc](https://github.com/teddynted/repo/commit/cccccccddddddd))
+
+### 🐛 Bug Fixes
+
+- Handle an empty tag list ([eeeeeee](https://github.com/teddynted/repo/commit/eeeeeeefffffff))
+
+### 📚 Documentation
+
+- Explain the flags ([1111111](https://github.com/teddynted/repo/commit/1111111222222))
+
+### 🧹 Chores
+
+- Bump the linter ([3333333](https://github.com/teddynted/repo/commit/3333333444444))
+
+### Contributors
+
+- Teddy Kekana (3 commits)
+- Ada Lovelace (2 commits)
+
+Initial release.

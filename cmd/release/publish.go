@@ -14,6 +14,17 @@ import (
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/release"
 )
 
+// newGitHubClient builds an API client. Empty URLs fall back to the environment
+// GitHub Actions sets, and then to the public endpoints, so the same code works
+// against github.com and against GitHub Enterprise Server.
+func newGitHubClient(token, apiURL, uploadURL string) *github.Client {
+	return github.NewClient(token,
+		github.WithAPIURL(firstNonEmpty(apiURL, os.Getenv("GITHUB_API_URL"))),
+		github.WithUploadURL(firstNonEmpty(uploadURL, os.Getenv("GITHUB_UPLOAD_URL"))),
+		github.WithUserAgent("go-release-cli/"+version),
+	)
+}
+
 // resolveTag returns the tag a post-tag command should act on: the --tag flag,
 // the tag GitHub Actions is running for, or the latest release tag.
 func resolveTag(ctx context.Context, svc *release.Service, flagValue string) (string, error) {
@@ -50,7 +61,7 @@ func notesCommand(ctx context.Context, args []string) error {
 		return err
 	}
 
-	p := newPrinter(os.Stdout, os.Stderr, useColor(opts.noColor, os.Stderr))
+	p := newPrinter(os.Stdout, os.Stderr, opts.printerOptions(os.Stderr))
 	svc := release.New(opts.config())
 
 	name, err := resolveTag(ctx, svc, *tag)
@@ -95,7 +106,7 @@ func changelogCommand(ctx context.Context, args []string) error {
 		return err
 	}
 
-	p := newPrinter(os.Stdout, os.Stderr, useColor(opts.noColor, os.Stderr))
+	p := newPrinter(os.Stdout, os.Stderr, opts.printerOptions(os.Stderr))
 	svc := release.New(opts.config())
 
 	name, err := resolveTag(ctx, svc, *tag)
@@ -165,7 +176,7 @@ func publishCommand(ctx context.Context, args []string) error {
 		return err
 	}
 
-	p := newPrinter(os.Stdout, os.Stderr, useColor(opts.noColor, os.Stderr))
+	p := newPrinter(os.Stdout, os.Stderr, opts.printerOptions(os.Stderr))
 	svc := release.New(opts.config())
 
 	tagName, err := resolveTag(ctx, svc, *tag)
@@ -195,14 +206,18 @@ func publishCommand(ctx context.Context, args []string) error {
 
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
-		return errors.New("GITHUB_TOKEN is not set; it is needed to create the GitHub Release")
+		return &release.Error{
+			What: "GITHUB_TOKEN is not set.",
+			Why:  "Creating a GitHub Release requires a token with the contents: write permission.",
+			Solutions: []string{
+				"export a personal access token: export GITHUB_TOKEN=…",
+				"in GitHub Actions, pass it: env: GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+				"preview the notes without publishing: --dry-run",
+			},
+		}
 	}
 
-	client := github.NewClient(token,
-		github.WithAPIURL(firstNonEmpty(*apiURL, os.Getenv("GITHUB_API_URL"))),
-		github.WithUploadURL(firstNonEmpty(*uploadURL, os.Getenv("GITHUB_UPLOAD_URL"))),
-		github.WithUserAgent("go-release-cli/"+version),
-	)
+	client := newGitHubClient(token, *apiURL, *uploadURL)
 
 	title := *name
 	if title == "" {

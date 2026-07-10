@@ -21,9 +21,16 @@ type fakeGit struct {
 	status    []string
 	tags      []string
 	commits   map[string][]git.Commit // keyed by "from..to"
+	diffs     map[string]git.DiffStat // keyed by "from..to"
 	remote    string
 	remoteErr error
 	date      time.Time
+
+	upstream       string
+	upstreamErr    error
+	ahead, behind  int
+	aheadBehindErr error
+	diffErr        error
 
 	createTagErr error
 	pushTagErr   error
@@ -97,16 +104,38 @@ func (f *fakeGit) RemoteURL(context.Context, string) (string, error) {
 	return f.remote, nil
 }
 
+func (f *fakeGit) Upstream(context.Context) (string, error) {
+	if f.upstreamErr != nil {
+		return "", f.upstreamErr
+	}
+	return f.upstream, nil
+}
+
+func (f *fakeGit) AheadBehind(_ context.Context, _ string) (int, int, error) {
+	return f.ahead, f.behind, f.aheadBehindErr
+}
+
+func (f *fakeGit) Diff(_ context.Context, from, to string) (git.DiffStat, error) {
+	if f.diffErr != nil {
+		return git.DiffStat{}, f.diffErr
+	}
+	return f.diffs[from+".."+to], nil
+}
+
 // newFake returns a repository on main with one feature commit since v1.2.3.
 func newFake() *fakeGit {
 	return &fakeGit{
-		branch: "main",
-		tags:   []string{"v1.0.0", "v1.2.3", "v1.1.0"},
-		remote: "git@github.com:teddynted/repo.git",
-		date:   time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),
+		branch:   "main",
+		tags:     []string{"v1.0.0", "v1.2.3", "v1.1.0"},
+		remote:   "git@github.com:teddynted/repo.git",
+		date:     time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),
+		upstream: "origin/main",
 		commits: map[string][]git.Commit{
-			"v1.2.3..HEAD":   {{SHA: "aaaaaaabbbb", Subject: "feat: add a thing"}},
-			"v1.1.0..v1.2.3": {{SHA: "cccccccdddd", Subject: "fix: fix a thing"}},
+			"v1.2.3..HEAD":   {{SHA: "aaaaaaabbbb", Subject: "feat: add a thing", AuthorName: "Teddy Kekana", AuthorEmail: "teddy@example.com"}},
+			"v1.1.0..v1.2.3": {{SHA: "cccccccdddd", Subject: "fix: fix a thing", AuthorName: "Ada Lovelace", AuthorEmail: "ada@example.com"}},
+		},
+		diffs: map[string]git.DiffStat{
+			"v1.2.3..HEAD": {Files: 3, Insertions: 42, Deletions: 7},
 		},
 	}
 }
@@ -553,5 +582,84 @@ func TestTrimPrefix(t *testing.T) {
 	}
 	if got, ok := trimPrefix("1.2.3", ""); !ok || got != "1.2.3" {
 		t.Errorf("an empty prefix should pass the tag through, got %q, %v", got, ok)
+	}
+}
+
+func TestPlanReportsDiffStat(t *testing.T) {
+	plan, err := NewWithGit(testConfig(), newFake()).Plan(context.Background(), semver.BumpMinor, "")
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if plan.Diff.Files != 3 || plan.Diff.Insertions != 42 || plan.Diff.Deletions != 7 {
+		t.Errorf("Diff = %+v", plan.Diff)
+	}
+}
+
+// The diff is reported, not enforced: a git failure must not stop a release.
+func TestPlanSurvivesADiffFailure(t *testing.T) {
+	fake := newFake()
+	fake.diffErr = errors.New("diff exploded")
+
+	plan, err := NewWithGit(testConfig(), fake).Plan(context.Background(), semver.BumpMinor, "")
+	if err != nil {
+		t.Fatalf("an unreadable diff should not fail the release: %v", err)
+	}
+	if plan.Diff != (git.DiffStat{}) {
+		t.Errorf("Diff = %+v, want the zero value", plan.Diff)
+	}
+}
+
+func TestPlanDaysSincePrevious(t *testing.T) {
+	fake := newFake()
+	// CommitDate is what the previous tag reports.
+	fake.date = time.Now().UTC().Add(-72 * time.Hour)
+
+	plan, err := NewWithGit(testConfig(), fake).Plan(context.Background(), semver.BumpMinor, "")
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	days, ok := plan.DaysSincePrevious()
+	if !ok || days != 3 {
+		t.Errorf("DaysSincePrevious() = %d, %v; want 3, true", days, ok)
+	}
+}
+
+// A first release has nothing to measure from.
+func TestPlanDaysSincePreviousUnknownForFirstRelease(t *testing.T) {
+	fake := newFake()
+	fake.tags = nil
+	fake.commits = map[string][]git.Commit{"..HEAD": {{SHA: "a", Subject: "feat: first"}}}
+
+	plan, err := NewWithGit(testConfig(), fake).Plan(context.Background(), semver.BumpMinor, "")
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if !plan.PreviousDate.IsZero() {
+		t.Errorf("PreviousDate = %v, want the zero time", plan.PreviousDate)
+	}
+	if _, ok := plan.DaysSincePrevious(); ok {
+		t.Error("DaysSincePrevious() should report ok=false for a first release")
+	}
+}
+
+// A clock skewed backwards must not produce a negative age.
+func TestPlanDaysSincePreviousRejectsTheFuture(t *testing.T) {
+	plan := &Plan{
+		Date:         time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC),
+		PreviousDate: time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC),
+	}
+	if _, ok := plan.DaysSincePrevious(); ok {
+		t.Error("a previous release in the future should report ok=false")
+	}
+}
+
+func TestPlanContributors(t *testing.T) {
+	plan, err := NewWithGit(testConfig(), newFake()).Plan(context.Background(), semver.BumpMinor, "")
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	contributors := plan.Contributors()
+	if len(contributors) != 1 || contributors[0].Name != "Teddy Kekana" {
+		t.Errorf("Contributors() = %+v", contributors)
 	}
 }

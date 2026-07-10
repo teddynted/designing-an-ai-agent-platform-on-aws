@@ -228,3 +228,107 @@ func TestCommandErrorMessage(t *testing.T) {
 		t.Error("CommandError should unwrap to the underlying error")
 	}
 }
+
+// The exact strings git prints, captured from `git diff --shortstat`. Note the
+// singular forms: one file, one insertion, one deletion.
+func TestParseShortStat(t *testing.T) {
+	tests := []struct {
+		out  string
+		want DiffStat
+	}{
+		{" 2 files changed, 3 insertions(+), 1 deletion(-)", DiffStat{Files: 2, Insertions: 3, Deletions: 1}},
+		{" 1 file changed, 1 insertion(+)", DiffStat{Files: 1, Insertions: 1}},
+		{" 2 files changed, 5 insertions(+)", DiffStat{Files: 2, Insertions: 5}},
+		{" 1 file changed, 2 deletions(-)", DiffStat{Files: 1, Deletions: 2}},
+		{" 30 files changed, 2881 insertions(+), 651 deletions(-)", DiffStat{Files: 30, Insertions: 2881, Deletions: 651}},
+
+		// No change at all: git prints nothing.
+		{"", DiffStat{}},
+		{"   ", DiffStat{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.out, func(t *testing.T) {
+			if got := parseShortStat(tt.out); got != tt.want {
+				t.Errorf("parseShortStat(%q) = %+v, want %+v", tt.out, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDiffUsesEmptyTreeForAFirstRelease(t *testing.T) {
+	stub := &stubRunner{responses: map[string]string{
+		"diff --shortstat " + emptyTree + " v1.0.0": " 2 files changed, 5 insertions(+)",
+		"diff --shortstat v1.0.0 HEAD":              " 1 file changed, 1 insertion(+)",
+	}}
+	repo := NewWithRunner(stub)
+	ctx := context.Background()
+
+	// A first release has no previous tag, so it diffs against the empty tree
+	// and reports its entire contents as additions.
+	first, err := repo.Diff(ctx, "", "v1.0.0")
+	if err != nil {
+		t.Fatalf("Diff against the empty tree: %v", err)
+	}
+	if first.Insertions != 5 || first.Deletions != 0 {
+		t.Errorf("first release diff = %+v", first)
+	}
+
+	later, err := repo.Diff(ctx, "v1.0.0", "HEAD")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if later.Files != 1 {
+		t.Errorf("later diff = %+v", later)
+	}
+}
+
+func TestAheadBehind(t *testing.T) {
+	// git prints "<behind>\t<ahead>": the left side of the range is upstream.
+	stub := &stubRunner{responses: map[string]string{
+		"rev-list --left-right --count origin/main...HEAD": "2\t5",
+		"rev-list --left-right --count origin/dev...HEAD":  "0\t0",
+	}}
+	repo := NewWithRunner(stub)
+	ctx := context.Background()
+
+	ahead, behind, err := repo.AheadBehind(ctx, "origin/main")
+	if err != nil {
+		t.Fatalf("AheadBehind: %v", err)
+	}
+	if ahead != 5 || behind != 2 {
+		t.Errorf("AheadBehind = ahead %d, behind %d; want 5, 2", ahead, behind)
+	}
+
+	if ahead, behind, _ := repo.AheadBehind(ctx, "origin/dev"); ahead != 0 || behind != 0 {
+		t.Errorf("a synchronised branch should report 0, 0; got %d, %d", ahead, behind)
+	}
+}
+
+func TestAheadBehindRejectsGarbage(t *testing.T) {
+	stub := &stubRunner{responses: map[string]string{
+		"rev-list --left-right --count origin/main...HEAD": "not a count",
+	}}
+	if _, _, err := NewWithRunner(stub).AheadBehind(context.Background(), "origin/main"); err == nil {
+		t.Error("unparseable rev-list output should be reported")
+	}
+}
+
+// A branch that was never pushed has no upstream. That is not a failure.
+func TestUpstreamAbsent(t *testing.T) {
+	stub := &stubRunner{errs: map[string]error{
+		"rev-parse --abbrev-ref --symbolic-full-name @{upstream}": &CommandError{Err: errors.New("exit status 128")},
+	}}
+	if _, err := NewWithRunner(stub).Upstream(context.Background()); !errors.Is(err, ErrNoUpstream) {
+		t.Errorf("Upstream() = %v, want ErrNoUpstream", err)
+	}
+}
+
+func TestUpstream(t *testing.T) {
+	stub := &stubRunner{responses: map[string]string{
+		"rev-parse --abbrev-ref --symbolic-full-name @{upstream}": "origin/main",
+	}}
+	got, err := NewWithRunner(stub).Upstream(context.Background())
+	if err != nil || got != "origin/main" {
+		t.Errorf("Upstream() = %q, %v", got, err)
+	}
+}

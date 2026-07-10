@@ -1,0 +1,17 @@
+
+Validation
+
+✓ Git repository — inside a Git work tree
+✓ Release branch — on main
+⚠ Working tree — 3 changes uncommitted, allowed by --allow-dirty
+✓ Untracked files — none
+✓ Branch synchronised — up to date with origin/main
+⚠ GitHub authentication — GITHUB_TOKEN is not set; the release workflow will
+  publish
+
+Release Confidence
+
+⚠ ★★★☆☆ Ready with warnings
+
+  • 3 changes uncommitted, allowed by --allow-dirty
+  • GITHUB_TOKEN is not set; the release workflow will publish

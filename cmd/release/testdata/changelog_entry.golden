@@ -1,0 +1,23 @@
+## [1.3.0](https://github.com/teddynted/repo/compare/v1.2.3...v1.3.0) - 2026-07-10
+
+### ⚠️ Breaking Changes
+
+- Require Go 1.25 ([ccccccc](https://github.com/teddynted/repo/commit/cccccccddddddd))
+  Go 1.24 is no longer supported
+
+### 🚀 Features
+
+- **cli:** Add --dry-run ([aaaaaaa](https://github.com/teddynted/repo/commit/aaaaaaabbbbbbb))
+- Require Go 1.25 ([ccccccc](https://github.com/teddynted/repo/commit/cccccccddddddd))
+
+### 🐛 Bug Fixes
+
+- Handle an empty tag list ([eeeeeee](https://github.com/teddynted/repo/commit/eeeeeeefffffff))
+
+### 📚 Documentation
+
+- Explain the flags ([1111111](https://github.com/teddynted/repo/commit/1111111222222))
+
+### 🧹 Chores
+
+- Bump the linter ([3333333](https://github.com/teddynted/repo/commit/3333333444444))
