@@ -1,12 +1,12 @@
 # 1. Architecture Overview
 
-> Milestone 1 — Initial Architecture. Design only; no application implementation.
+> Initial architecture. Design only; no application implementation.
 
 ## 1.1 What we are building
 
 A production-ready platform on AWS for running **autonomous AI agents** and **event-driven AI workflows**, supporting both **managed** inference (Amazon Bedrock) and **self-hosted** inference (Ollama), orchestrated through **n8n** (deterministic workflow automation) and **OpenClaw** (conversational, long-running agent runtime).
 
-The platform is the substrate. Individual agents and workflows are tenants of it, delivered in later milestones.
+The platform is the substrate. Individual agents and workflows are tenants of it, built on top of it later.
 
 ## 1.2 The central design problem
 
@@ -145,10 +145,10 @@ Ollama capacity unavailable         ->  fall back to Bedrock
 | Easy to monitor, secure, maintain | Agent-run-ID trace propagation, per-agent cost attribution, SSM Session Manager (no SSH, no bastion) |
 | New providers with minimal change | Add an adapter behind the Model Gateway; callers unchanged ([11 — Extensibility](11-extensibility.md)) |
 
-## 1.6 What this milestone deliberately does not do
+## 1.6 What this design deliberately does not do
 
 - No workflows, agents, prompts, or business logic.
-- No CloudFormation templates — the *stack decomposition* is specified ([06 — Deployment](06-deployment.md)); the templates are Milestone 2.
+- No CloudFormation templates — the *stack decomposition* is specified ([06 — Deployment](06-deployment.md)); the templates come with implementation.
 - The Model Gateway is **specified as an interface now, built later**. Defining the seam early costs nothing and prevents a painful rewiring once agents depend on providers directly. Callers can point at Bedrock via the same contract on day one.
 
 ## 1.7 Reading order

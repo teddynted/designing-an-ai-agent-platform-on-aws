@@ -45,7 +45,7 @@ Treat the Gateway as a **singleton with fast, lossless recovery**, not as a high
 - **No horizontal scaling.** Conversational concurrency is bounded by one process. This is the first ceiling the platform will hit.
 - **No rolling deploys.** Updating the Gateway is stop-replace-start, in a maintenance window ([06 §6.5](../architecture/06-deployment.md)).
 - EFS is slower per operation and more expensive per GB than EBS.
-- ⚠ **The EFS choice rests on an untested assumption (A1):** that OpenClaw's state directory behaves correctly on EFS — no SQLite locking pathologies, tolerable latency. **If false, the entire cross-AZ HA story collapses** and we fall back to EBS + AZ-pinning + frequent snapshots, worsening both RTO and RPO. This is the **highest-priority validation task in Milestone 2** and should be tested before any CloudFormation is written ([12 — Risks](../architecture/12-risks-assumptions-constraints.md)).
+- ⚠ **The EFS choice rests on an untested assumption (A1):** that OpenClaw's state directory behaves correctly on EFS — no SQLite locking pathologies, tolerable latency. **If false, the entire cross-AZ HA story collapses** and we fall back to EBS + AZ-pinning + frequent snapshots, worsening both RTO and RPO. This is the **highest-priority validation task before implementation** and should be tested before any CloudFormation is written ([12 — Risks](../architecture/12-risks-assumptions-constraints.md)).
 - The Gateway holds the host Docker socket to spawn sandboxes, which is equivalent to root on the host. The Gateway process is therefore itself a trust boundary, not merely a supervisor of one.
 
 ## Alternatives considered
@@ -56,6 +56,6 @@ Treat the Gateway as a **singleton with fast, lossless recovery**, not as a high
 
 **Spot with fast recovery.** Rejected: interruptions would be frequent, and each one is a multi-minute conversational outage. The instance is one of three On-Demand instances in the platform; the saving is not worth the availability.
 
-**Stateless Gateway with session state externalised to Postgres/Redis.** The correct long-term answer, and it removes the singleton constraint entirely. Rejected for Milestone 1: it means forking OpenClaw or substantially restructuring it, and the channel device-link problem persists regardless — the pairing lives in the chat platform, not in our datastore. Externalising sessions solves concurrency, not channel ownership. Sharding solves both, and is cheaper.
+**Stateless Gateway with session state externalised to Postgres/Redis.** The correct long-term answer, and it removes the singleton constraint entirely. Rejected for now: it means forking OpenClaw or substantially restructuring it, and the channel device-link problem persists regardless — the pairing lives in the chat platform, not in our datastore. Externalising sessions solves concurrency, not channel ownership. Sharding solves both, and is cheaper.
 
 **Run the Gateway on Fargate with EFS.** Removes instance management. Rejected: the Gateway spawns sibling Docker containers via the host Docker socket, which Fargate does not expose. Feasible only if sandboxing moves to a different mechanism.

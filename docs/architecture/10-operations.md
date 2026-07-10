@@ -111,14 +111,13 @@ Two rows have **no automated recovery** and both are called out deliberately: ma
 - **Drift detection:** scheduled CloudFormation drift detection; investigate every finding. Drift in a platform where agents hold IAM roles is not a tidiness issue.
 - **Backup verification:** **restore-test EFS and RDS backups quarterly.** An untested backup is a hypothesis. Given that Gateway state loss is unrecoverable by automation, this is the single most important scheduled maintenance task in the platform.
 
-## 10.7 Operational maturity roadmap
+## 10.7 What is specified here, and what is not
 
-| Milestone | Capability |
-|---|---|
-| M1 (this) | Architecture; observability *design*; `agent_run_id` contract defined |
-| M2 | CloudFormation stacks; CloudWatch dashboards; core alarms; SSM runbooks |
-| M3 | Model Gateway with token metering; budget circuit-breaker; cost-per-outcome dashboard |
-| M4 | Agent quality metrics; approval workflow; injection-detection signals |
-| M5 | Chaos testing: kill the Gateway, kill an AZ, exhaust Spot; verify RTOs match §10.4 |
+Everything above is a **design**: the `agent_run_id` contract, the metric definitions, the alarms, the SLOs. None of it is built. Building it has a natural order, because each stage depends on the one before:
 
-The RTOs in this document are **designed**, not measured. Milestone 5 is where they become facts. Until then they are claims, and this document should be read as making claims.
+1. **Infrastructure and baseline telemetry** — CloudFormation stacks, CloudWatch dashboards, core alarms, SSM runbooks.
+2. **Token metering and the budget circuit-breaker**, which live in the Model Gateway. Until these exist, the cost-per-outcome dashboard cannot be built and the platform's most likely expensive incident has no hard stop ([09 §9.5](09-cost.md)).
+3. **Agent quality metrics**, the approval workflow, and injection-detection signals — all of which depend on the trace contract from stage 1 and the metering from stage 2.
+4. **Chaos testing** — kill the Gateway, kill an AZ, exhaust Spot capacity — to check the RTOs in §10.4 against reality.
+
+**The RTOs in this document are designed, not measured.** Only stage 4 turns them into facts. Until then they are claims, and this document should be read as making claims rather than reporting results.

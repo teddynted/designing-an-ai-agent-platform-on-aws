@@ -8,15 +8,15 @@ Assumptions are things this design **treats as true without having verified them
 
 | # | Assumption | If false | Validate |
 |---|---|---|---|
-| A1 | ⚠ **OpenClaw's state directory works correctly on EFS** (no SQLite locking issues, tolerable latency) | The cross-AZ HA story collapses. Fall back to EBS + AZ-pinning + frequent snapshots; RTO and RPO both worsen | **M2, highest priority.** Mount, run, restart, fail over |
-| A2 | ⚠ **Most required chat channels are outbound-initiated** | Zero-ingress property lost for that channel; route it via ALB → n8n → Gateway ([05 §5.4](05-network-and-boundaries.md)) | M2, per channel |
-| A3 | ⚠ **Workflow steps can be made idempotent or compensating** | Spot workers become unsafe; n8n workers move to On-Demand, cost rises materially | M2, when first workflows land |
-| A4 | GPU Spot capacity for `g5`/`g6` is available in ≥2 AZs most of the time | More Bedrock fallback than modelled; token spend rises, availability holds | M2, observe interruption + launch-failure rates |
-| A5 | n8n queue mode isolates all durable state from workers | Workers are not stateless; Spot is unsafe | M2, read current n8n docs (not verified in M1) |
-| A6 | Bedrock batch/prompt-caching discounts make bulk routing economics work | Crossover point moves; Ollama justified on residency/control rather than cost | M2, re-cost against current pricing |
-| A7 | A single Gateway process handles expected conversational concurrency | Sharding ([07 §7.3](07-scalability-and-ha.md)) is needed sooner | M3, load test |
-| A8 | Docker sibling-container sandboxing gives adequate isolation | Escalate to Firecracker/microVM or dedicated sandbox instances | M2, threat review |
-| A9 | Bedrock is available in the chosen region with the required models | Region choice changes, or cross-region inference profiles required | M2, day one |
+| A1 | ⚠ **OpenClaw's state directory works correctly on EFS** (no SQLite locking issues, tolerable latency) | The cross-AZ HA story collapses. Fall back to EBS + AZ-pinning + frequent snapshots; RTO and RPO both worsen | **Highest priority — before any infrastructure is written.** Mount, run, restart, fail over |
+| A2 | ⚠ **Most required chat channels are outbound-initiated** | Zero-ingress property lost for that channel; route it via ALB → n8n → Gateway ([05 §5.4](05-network-and-boundaries.md)) | Per channel, before it is connected |
+| A3 | ⚠ **Workflow steps can be made idempotent or compensating** | Spot workers become unsafe; n8n workers move to On-Demand, cost rises materially | When the first workflows land |
+| A4 | GPU Spot capacity for `g5`/`g6` is available in ≥2 AZs most of the time | More Bedrock fallback than modelled; token spend rises, availability holds | Observe interruption and launch-failure rates |
+| A5 | n8n queue mode isolates all durable state from workers | Workers are not stateless; Spot is unsafe | Read current n8n docs (not verified during design) |
+| A6 | Bedrock batch/prompt-caching discounts make bulk routing economics work | Crossover point moves; Ollama justified on residency/control rather than cost | Re-cost against current pricing |
+| A7 | A single Gateway process handles expected conversational concurrency | Sharding ([07 §7.3](07-scalability-and-ha.md)) is needed sooner | Load test |
+| A8 | Docker sibling-container sandboxing gives adequate isolation | Escalate to Firecracker/microVM or dedicated sandbox instances | Threat review |
+| A9 | Bedrock is available in the chosen region with the required models | Region choice changes, or cross-region inference profiles required | Day one |
 | A10 | Team is comfortable operating EC2 + ASG + CloudFormation | The EKS-vs-EC2 trade-off ([03](03-aws-services.md)) shifts | Now |
 
 **A1 is the assumption this architecture rests on most heavily.** The choice of EFS is what converts "Gateway state loss requires a human with a phone" from a likely AZ-failure outcome into an unlikely one. It is asserted in [07 §7.4](07-scalability-and-ha.md) and it is **not yet tested**. Test it before writing any other CloudFormation.
@@ -34,7 +34,7 @@ Constraints are fixed. They shaped the design; they are not open for optimisatio
 | Must use custom AMIs | Drove the three-AMI Image Builder pipeline |
 | Must minimise EC2 startup time | Drove baked weights + pre-staged snapshots. **Collided with the warm-pool/Spot limitation** |
 | Must support managed *and* self-hosted models | Drove the Model Gateway seam |
-| Milestone 1 is design-only | No templates, no workflows. RTOs are *designed*, not measured |
+| This repository is design-only | No templates, no workflows. RTOs are *designed*, not measured |
 
 **Imposed by technology:**
 
@@ -60,7 +60,7 @@ Scored `likelihood × impact`. Ordered by the product.
 | **R2** | **Prompt injection → agent misuses its legitimate authority** | **High** | High | Sandbox with no credentials; IMDS blocked; egress allowlist; tool risk tiers; human approval for privileged tools ([08](08-security.md)) | **Medium.** Contained, not solved. A fully-persuaded agent can still use its auto-approved tools |
 | R3 | Gateway EFS/state loss → manual channel re-pairing | Low | High | EFS Backup, `DeletionPolicy: Retain`, cross-region copy, SCP denying deletion, quarterly restore tests | Low |
 | R4 | GPU Spot capacity unavailable at scale | Medium | Medium | Instance-type + AZ diversification; **Bedrock fallback via Model Gateway** | **Low — degrades cost, not availability.** This is the design's best-earned mitigation |
-| R5 | A1 false: OpenClaw incompatible with EFS | Medium | High | Test first (M2). Fallback: EBS + AZ-pin + frequent snapshots | Medium until tested |
+| R5 | A1 false: OpenClaw incompatible with EFS | Medium | High | Test first. Fallback: EBS + AZ-pin + frequent snapshots | Medium until tested |
 | R6 | Conversational concurrency ceiling reached | Medium | Medium | Vertical scale, then shard ([07 §7.3](07-scalability-and-ha.md)) | Low — the growth path is designed |
 | R7 | OpenClaw supply-chain compromise | Medium | High | Pin versions; verify provenance; review deps; never `curl \| bash` in AMI builds; no secrets in sandbox | Medium — fast-moving project, three renames, active impersonation scams during the rename |
 | R8 | Model Gateway becomes a hot-path SPOF | Medium | Medium | Stateless, ≥2 AZs; callers can speak the identical contract directly to Bedrock | Low |
@@ -73,13 +73,13 @@ Scored `likelihood × impact`. Ordered by the product.
 
 ### The two risks that define this platform
 
-**R1 and R2 are the platform's characteristic risks** — the ones that exist *because* it runs autonomous agents, not because it runs on AWS. Both are rated High/High. Both are mitigated by controls that live in the Model Gateway and the tool policy, and **neither of those components is built in Milestone 1.**
+**R1 and R2 are the platform's characteristic risks** — the ones that exist *because* it runs autonomous agents, not because it runs on AWS. Both are rated High/High. Both are mitigated by controls that live in the Model Gateway and the tool policy, and **neither of those components exists yet.**
 
-That is a defensible position for a design milestone, but it must be said out loud: **the platform is not safe to point at production data or real credentials until the budget circuit-breaker and the tool-policy sandbox exist.** They are not "hardening"; they are load-bearing. Sequence them into Milestone 2, ahead of any workflow that touches something real.
+That is a defensible position for a design document, but it must be said out loud: **the platform is not safe to point at production data or real credentials until the budget circuit-breaker and the tool-policy sandbox exist.** They are not "hardening"; they are load-bearing. Build them ahead of any workflow that touches something real.
 
 Everything else in this register is ordinary infrastructure risk with ordinary infrastructure mitigations.
 
-## 12.4 Recommendations for Milestone 2
+## 12.4 What to validate and build first
 
 In priority order, derived from the above:
 
@@ -88,6 +88,6 @@ In priority order, derived from the above:
 3. **Build the budget circuit-breaker** before any agent touches a frontier model with a real key. R1 is unmitigated without it.
 4. **Stand up the stack layering** (`10-network` → `50-serverless`) with SSM parameters as the cross-stack contract.
 5. **Build the three-AMI Image Builder pipeline** and measure real cold-start times. The 2–4 minute figure in [06](06-deployment.md) is an estimate.
-6. Confirm A5 (n8n queue mode) and A6 (Bedrock pricing) against current documentation — both were assumed, not verified, in this milestone.
+6. Confirm A5 (n8n queue mode) and A6 (Bedrock pricing) against current documentation — both were assumed, not verified, during design.
 7. Request Bedrock quota increases. They take days.
 8. Instrument the Bedrock/Ollama routing split from day one, so the cost crossover in [09 §9.4](09-cost.md) is measured rather than assumed.
