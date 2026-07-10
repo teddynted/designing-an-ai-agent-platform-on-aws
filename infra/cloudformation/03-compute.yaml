@@ -22,10 +22,12 @@ Parameters:
 
   InstanceType:
     Type: String
-    Default: t3.large
+    Default: t3.micro
     Description: >-
-      Instance type for the foundation. A general-purpose type is enough here;
-      GPU types (for example g5.xlarge) are selected when Ollama is introduced.
+      Instance type for the foundation. t3.micro is free-tier eligible and
+      sufficient for this educational setup: later milestones install and
+      configure the agent software (including Ollama) here, but do not run heavy
+      model inference, so no GPU type is needed. Raise it to run real workloads.
 
   RootVolumeSize:
     Type: Number
