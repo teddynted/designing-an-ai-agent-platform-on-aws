@@ -19,8 +19,11 @@ COMMON      := --region $(REGION) --capabilities $(CAPS) \
 STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observability
 
 .DEFAULT_GOAL := help
-.PHONY: help lint validate deploy delete outputs bootstrap install-hooks \
-        $(addprefix deploy-,$(STACKS))
+# Note: the per-stack `deploy-%` targets are deliberately NOT declared .PHONY.
+# GNU Make skips implicit/pattern-rule search for phony targets, so listing
+# `deploy-01-network` etc. here would silently stop the `deploy-%` recipe from
+# ever running — `make deploy` would print "deployment complete" and do nothing.
+.PHONY: help lint validate deploy delete outputs bootstrap install-hooks
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
