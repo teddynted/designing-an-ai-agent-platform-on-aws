@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  AI Agent Platform — Compute foundation (Milestone 2).
+  A single, disposable EC2 Spot instance that future milestones will use to host
+  OpenClaw, Ollama, and n8n. This template provisions the instance only; it does
+  not install those applications. The instance is treated as ephemeral: its
+  encrypted root volume is deleted on termination and holds no durable state.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aiap
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Lower-case project prefix. Must match the network and IAM stacks.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment. Must match the other stacks.
+
+  InstanceType:
+    Type: String
+    Default: t3.large
+    Description: >-
+      Instance type for the foundation. A general-purpose type is enough here;
+      GPU types (for example g5.xlarge) are selected when Ollama is introduced.
+
+  RootVolumeSize:
+    Type: Number
+    Default: 30
+    MinValue: 20
+    MaxValue: 200
+    Description: >-
+      Root EBS volume size in GiB. Sized for the OS, container images, and
+      temporary runtime files only — never for durable application state.
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: >-
+      Amazon Linux 2023 AMI, resolved from the AWS-managed SSM public parameter
+      so no AMI ID is hard-coded and the latest patched image is always used.
+
+Resources:
+  # A launch template carries everything about how the instance boots. The
+  # CloudFormation AWS::EC2::Instance resource cannot request Spot directly, so
+  # the Spot purchase (and the rest of the boot configuration) lives here. The
+  # template is also what a later milestone's Auto Scaling group will reuse.
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${ProjectName}-${Environment}-lt"
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType
+        ImageId: !Ref LatestAmiId
+        # No SSH key is attached, deliberately. The instance has no inbound
+        # access and is managed exclusively through SSM Session Manager.
+        IamInstanceProfile:
+          Name:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-InstanceProfileName"
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-InstanceSecurityGroupId"
+        # Enforce IMDSv2: instance metadata requires a session token, which
+        # blocks the SSRF-style credential theft that IMDSv1 is prone to.
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+          HttpPutResponseHopLimit: 1
+        # Purchase the instance on the Spot market. It is disposable: on
+        # interruption it terminates rather than stopping, and is recreated by
+        # re-deploying this stack. Auto-recovery via an Auto Scaling group is a
+        # later milestone, which will reuse this same launch template.
+        InstanceMarketOptions:
+          MarketType: spot
+          SpotOptions:
+            SpotInstanceType: one-time
+            InstanceInterruptionBehavior: terminate
+        # The only volume is the root volume: encrypted, gp3, and deleted with
+        # the instance. There is deliberately no secondary or persistent volume.
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: !Ref RootVolumeSize
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        # Minimal bootstrap. Future milestones extend this to install the agent
+        # software; here it only confirms the instance reached a ready state.
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euo pipefail
+            dnf -y update
+            echo "${ProjectName}-${Environment} instance bootstrapped at $(date -u)" > /var/log/platform-bootstrap.log
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${ProjectName}-${Environment}-instance"
+              - Key: Lifecycle
+                Value: disposable
+          - ResourceType: volume
+            Tags:
+              - Key: Name
+                Value: !Sub "${ProjectName}-${Environment}-root-volume"
+              - Key: Lifecycle
+                Value: disposable
+
+  PlatformInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      SubnetId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PublicSubnetId"
+
+Outputs:
+  InstanceId:
+    Description: The EC2 instance ID.
+    Value: !Ref PlatformInstance
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-InstanceId"
+
+  InstanceAvailabilityZone:
+    Description: The AZ the instance launched in.
+    Value: !GetAtt PlatformInstance.AvailabilityZone
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-InstanceAvailabilityZone"
+
+  InstancePrivateIp:
+    Description: The instance's private IPv4 address.
+    Value: !GetAtt PlatformInstance.PrivateIp
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-InstancePrivateIp"

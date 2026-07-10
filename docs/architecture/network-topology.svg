@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 680" font-family="Arial, Helvetica, sans-serif" role="img" aria-label="Milestone 2 network topology">
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#232F3E"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1080" height="680" fill="#FFFFFF"/>
+  <text x="540" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="#232F3E">Network Topology — Milestone 2</text>
+  <text x="540" y="54" text-anchor="middle" font-size="12" fill="#5A6B7B">Addressing, routing, and the security boundary · proposed · not yet deployed</text>
+
+  <!-- Internet -->
+  <rect x="40" y="150" width="80" height="60" rx="10" fill="#6B7785"/>
+  <text x="80" y="186" text-anchor="middle" font-size="22" fill="#fff">&#127760;</text>
+  <text x="80" y="226" text-anchor="middle" font-size="12" fill="#232F3E" font-weight="700">Internet</text>
+  <text x="80" y="240" text-anchor="middle" font-size="10" fill="#5A6B7B">0.0.0.0/0</text>
+
+  <!-- Region -->
+  <rect x="200" y="90" width="846" height="560" rx="10" fill="none" stroke="#00A4A6" stroke-width="1.3" stroke-dasharray="6 4"/>
+  <text x="216" y="112" font-size="12" fill="#00838A" font-weight="700">Region</text>
+
+  <!-- VPC -->
+  <rect x="230" y="130" width="500" height="480" rx="9" fill="none" stroke="#8C4FFF" stroke-width="2"/>
+  <text x="246" y="152" font-size="12.5" fill="#6B25E0" font-weight="700">VPC</text>
+  <text x="300" y="152" font-size="12.5" fill="#232F3E" font-weight="700">10.20.0.0/16</text>
+
+  <!-- Internet Gateway -->
+  <g>
+    <rect x="270" y="168" width="52" height="52" rx="9" fill="#8C4FFF"/>
+    <text x="296" y="201" text-anchor="middle" font-size="18" fill="#fff">&#127760;</text>
+    <text x="360" y="190" font-size="11.5" fill="#232F3E" font-weight="700">Internet Gateway</text>
+    <text x="360" y="205" font-size="10" fill="#5A6B7B">attached to the VPC</text>
+  </g>
+
+  <!-- Availability Zone -->
+  <rect x="252" y="244" width="456" height="344" rx="8" fill="#FAFAFA" stroke="#B0B7BF" stroke-width="1.1" stroke-dasharray="2 3"/>
+  <text x="268" y="264" font-size="11" fill="#5A6B7B" font-weight="700">Availability Zone (first in region)</text>
+
+  <!-- Public subnet -->
+  <rect x="270" y="278" width="420" height="292" rx="7" fill="#F2F9EE" stroke="#7AA116" stroke-width="1.3" stroke-dasharray="5 3"/>
+  <text x="286" y="298" font-size="11.5" fill="#4E6C0E" font-weight="700">Public subnet</text>
+  <text x="400" y="298" font-size="11.5" fill="#232F3E" font-weight="700">10.20.1.0/24</text>
+  <text x="286" y="314" font-size="9.5" fill="#5A6B7B">MapPublicIpOnLaunch = true</text>
+
+  <!-- Security group boundary -->
+  <rect x="290" y="326" width="384" height="228" rx="7" fill="#F4EEFF" stroke="#8C4FFF" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="306" y="346" font-size="11" fill="#6B25E0" font-weight="700">Instance security group</text>
+
+  <!-- EC2 -->
+  <g>
+    <rect x="326" y="366" width="60" height="60" rx="9" fill="#ED7100"/>
+    <text x="356" y="404" text-anchor="middle" font-size="22" fill="#fff">&#128421;</text>
+    <text x="356" y="444" text-anchor="middle" font-size="11.5" fill="#232F3E" font-weight="700">EC2 Spot</text>
+    <text x="356" y="458" text-anchor="middle" font-size="9.5" fill="#5A6B7B">private + public IP</text>
+  </g>
+
+  <!-- SG rules mini-panel -->
+  <rect x="430" y="366" width="228" height="168" rx="6" fill="#FFFFFF" stroke="#C9B8F0" stroke-width="1"/>
+  <text x="444" y="386" font-size="10.5" fill="#6B25E0" font-weight="700">Security group rules</text>
+  <line x1="444" y1="394" x2="644" y2="394" stroke="#E4DAF7" stroke-width="1"/>
+  <text x="444" y="412" font-size="10" fill="#232F3E" font-weight="700">Inbound</text>
+  <text x="512" y="412" font-size="10" fill="#B02436">none — no ingress rules</text>
+  <text x="444" y="434" font-size="10" fill="#232F3E" font-weight="700">Outbound</text>
+  <text x="512" y="434" font-size="10" fill="#2F6417">all traffic &#8594; 0.0.0.0/0</text>
+  <line x1="444" y1="448" x2="644" y2="448" stroke="#E4DAF7" stroke-width="1"/>
+  <text x="444" y="468" font-size="9.5" fill="#5A6B7B">Management via SSM</text>
+  <text x="444" y="482" font-size="9.5" fill="#5A6B7B">Session Manager (no SSH)</text>
+  <text x="444" y="504" font-size="9.5" fill="#5A6B7B">IMDSv2 required</text>
+
+  <!-- Route table panel -->
+  <rect x="770" y="150" width="246" height="150" rx="8" fill="#FFFFFF" stroke="#8C4FFF" stroke-width="1.3"/>
+  <text x="786" y="172" font-size="11.5" fill="#6B25E0" font-weight="700">Public route table</text>
+  <line x1="786" y1="180" x2="1000" y2="180" stroke="#E4DAF7" stroke-width="1"/>
+  <text x="786" y="198" font-size="10" fill="#5A6B7B" font-weight="700">Destination</text>
+  <text x="906" y="198" font-size="10" fill="#5A6B7B" font-weight="700">Target</text>
+  <text x="786" y="220" font-size="10.5" fill="#232F3E">10.20.0.0/16</text>
+  <text x="906" y="220" font-size="10.5" fill="#232F3E">local</text>
+  <text x="786" y="242" font-size="10.5" fill="#232F3E">0.0.0.0/0</text>
+  <text x="906" y="242" font-size="10.5" fill="#232F3E">igw</text>
+  <line x1="786" y1="256" x2="1000" y2="256" stroke="#E4DAF7" stroke-width="1"/>
+  <text x="786" y="276" font-size="9.5" fill="#5A6B7B">Associated with the public subnet.</text>
+  <text x="786" y="290" font-size="9.5" fill="#5A6B7B">Default route sends egress to the IGW.</text>
+
+  <!-- Connections -->
+  <!-- Internet <-> IGW -->
+  <path d="M120,180 C200,180 220,194 268,194" fill="none" stroke="#232F3E" stroke-width="1.8" marker-end="url(#a)"/>
+  <!-- IGW -> subnet (via route) -->
+  <line x1="296" y1="222" x2="296" y2="276" stroke="#232F3E" stroke-width="1.5" marker-end="url(#a)"/>
+  <!-- route table -> IGW (dotted association) -->
+  <path d="M770,220 C560,220 420,210 324,200" fill="none" stroke="#8C4FFF" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a)"/>
+  <text x="560" y="205" font-size="9.5" fill="#6B25E0">0.0.0.0/0 &#8594; igw</text>
+
+  <text x="623" y="636" text-anchor="middle" font-size="10.5" fill="#5A6B7B">A /16 VPC leaves 250+ future /24 subnets · private subnets and a NAT path arrive with the agent workloads</text>
+</svg>

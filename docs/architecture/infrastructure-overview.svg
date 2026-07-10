@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 720" font-family="Arial, Helvetica, sans-serif" role="img" aria-label="Milestone 2 infrastructure overview">
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#232F3E"/>
+    </marker>
+    <marker id="ag" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#7D8998"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1080" height="720" fill="#FFFFFF"/>
+  <text x="540" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="#232F3E">Infrastructure Overview — Milestone 2</text>
+  <text x="540" y="54" text-anchor="middle" font-size="12" fill="#5A6B7B">Foundational resources provisioned by CloudFormation · proposed · not yet deployed</text>
+
+  <!-- Internet -->
+  <rect x="34" y="150" width="80" height="64" rx="10" fill="#6B7785"/>
+  <text x="74" y="188" text-anchor="middle" font-size="24" fill="#fff">&#127760;</text>
+  <text x="74" y="230" text-anchor="middle" font-size="12" fill="#232F3E" font-weight="700">Internet</text>
+
+  <!-- AWS Cloud -->
+  <rect x="190" y="84" width="856" height="600" rx="12" fill="none" stroke="#232F3E" stroke-width="2"/>
+  <rect x="204" y="98" width="34" height="18" rx="3" fill="#232F3E"/>
+  <text x="221" y="111" font-size="11" fill="#fff" font-weight="700" text-anchor="middle">aws</text>
+  <text x="248" y="112" font-size="14" fill="#232F3E" font-weight="700">AWS Cloud</text>
+
+  <!-- Region -->
+  <rect x="214" y="128" width="814" height="540" rx="10" fill="none" stroke="#00A4A6" stroke-width="1.3" stroke-dasharray="6 4"/>
+  <text x="230" y="150" font-size="12" fill="#00838A" font-weight="700">Region</text>
+
+  <!-- Regional services (outside VPC) -->
+  <g>
+    <rect x="712" y="168" width="56" height="56" rx="9" fill="#E7157B"/>
+    <text x="740" y="203" text-anchor="middle" font-size="20" fill="#fff">&#8646;</text>
+    <text x="740" y="242" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">EventBridge</text>
+  </g>
+  <g>
+    <rect x="852" y="168" width="56" height="56" rx="9" fill="#ED7100"/>
+    <text x="880" y="204" text-anchor="middle" font-size="22" fill="#fff">&#955;</text>
+    <text x="880" y="242" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">Lambda</text>
+    <text x="880" y="256" text-anchor="middle" font-size="9.5" fill="#5A6B7B">placeholder</text>
+  </g>
+  <g>
+    <rect x="852" y="320" width="56" height="56" rx="9" fill="#CD2264"/>
+    <text x="880" y="356" text-anchor="middle" font-size="20" fill="#fff">&#128200;</text>
+    <text x="880" y="394" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">CloudWatch</text>
+    <text x="880" y="408" text-anchor="middle" font-size="9.5" fill="#5A6B7B">log groups</text>
+  </g>
+  <g>
+    <rect x="852" y="470" width="56" height="56" rx="9" fill="#3F8624"/>
+    <text x="880" y="506" text-anchor="middle" font-size="20" fill="#fff">&#128451;</text>
+    <text x="880" y="544" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">S3</text>
+    <text x="880" y="558" text-anchor="middle" font-size="9.5" fill="#5A6B7B">artifacts</text>
+  </g>
+
+  <!-- VPC -->
+  <rect x="250" y="180" width="420" height="472" rx="9" fill="none" stroke="#8C4FFF" stroke-width="2"/>
+  <text x="266" y="202" font-size="12.5" fill="#6B25E0" font-weight="700">VPC</text>
+
+  <!-- Internet Gateway on the VPC boundary -->
+  <g>
+    <rect x="292" y="212" width="52" height="52" rx="9" fill="#8C4FFF"/>
+    <text x="318" y="245" text-anchor="middle" font-size="18" fill="#fff">&#127760;</text>
+    <text x="410" y="234" font-size="11" fill="#232F3E" font-weight="700">Internet Gateway</text>
+    <text x="410" y="249" font-size="9.5" fill="#5A6B7B">+ public route table</text>
+  </g>
+
+  <!-- Public subnet -->
+  <rect x="270" y="288" width="380" height="344" rx="7" fill="#F2F9EE" stroke="#7AA116" stroke-width="1.3" stroke-dasharray="5 3"/>
+  <text x="286" y="308" font-size="11.5" fill="#4E6C0E" font-weight="700">Public subnet</text>
+
+  <!-- Security group -->
+  <rect x="292" y="322" width="336" height="286" rx="7" fill="#F4EEFF" stroke="#8C4FFF" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="308" y="342" font-size="11" fill="#6B25E0" font-weight="700">Security group — no inbound</text>
+
+  <!-- EC2 Spot -->
+  <g>
+    <rect x="330" y="360" width="60" height="60" rx="9" fill="#ED7100"/>
+    <text x="360" y="398" text-anchor="middle" font-size="22" fill="#fff">&#128421;</text>
+    <text x="360" y="438" text-anchor="middle" font-size="11.5" fill="#232F3E" font-weight="700">EC2 Spot</text>
+    <text x="360" y="452" text-anchor="middle" font-size="9.5" fill="#5A6B7B">disposable · IMDSv2</text>
+  </g>
+  <!-- Root EBS -->
+  <g>
+    <rect x="330" y="500" width="60" height="60" rx="9" fill="#3F8624"/>
+    <text x="360" y="538" text-anchor="middle" font-size="20" fill="#fff">&#128190;</text>
+    <text x="360" y="578" text-anchor="middle" font-size="11.5" fill="#232F3E" font-weight="700">Root EBS</text>
+    <text x="360" y="592" text-anchor="middle" font-size="9.5" fill="#5A6B7B">encrypted · delete-on-term</text>
+  </g>
+  <!-- EBS attached to EC2 -->
+  <line x1="360" y1="422" x2="360" y2="498" stroke="#3F8624" stroke-width="1.6" marker-end="url(#a)"/>
+  <text x="368" y="466" font-size="9.5" fill="#2F6417">root volume</text>
+
+  <!-- Connections -->
+  <!-- Internet <-> IGW -->
+  <path d="M114,196 C210,196 240,238 290,238" fill="none" stroke="#232F3E" stroke-width="1.8" marker-end="url(#a)"/>
+  <!-- IGW -> EC2 (egress into subnet) -->
+  <path d="M318,266 C318,320 340,330 356,358" fill="none" stroke="#232F3E" stroke-width="1.6" marker-end="url(#a)"/>
+  <text x="300" y="300" font-size="9.5" fill="#5A6B7B">egress</text>
+  <!-- EC2 -> S3 -->
+  <path d="M392,384 C640,360 720,480 850,498" fill="none" stroke="#3F8624" stroke-width="1.6" marker-end="url(#a)"/>
+  <text x="640" y="430" font-size="10" fill="#2F6417" font-weight="700">artifacts</text>
+  <!-- EC2 -> CloudWatch -->
+  <path d="M392,372 C660,330 740,352 850,352" fill="none" stroke="#7D8998" stroke-width="1.3" stroke-dasharray="3 3" marker-end="url(#ag)"/>
+  <text x="600" y="352" font-size="10" fill="#5A6B7B">logs</text>
+  <!-- EventBridge -> Lambda -->
+  <line x1="770" y1="196" x2="850" y2="196" stroke="#232F3E" stroke-width="1.8" marker-end="url(#a)"/>
+  <!-- Lambda -> CloudWatch -->
+  <path d="M880,226 C880,270 880,290 880,318" fill="none" stroke="#7D8998" stroke-width="1.3" stroke-dasharray="3 3" marker-end="url(#ag)"/>
+  <text x="888" y="272" font-size="9.5" fill="#5A6B7B">logs</text>
+
+  <!-- Legend -->
+  <g font-size="10.5" fill="#232F3E">
+    <rect x="250" y="628" width="13" height="13" rx="3" fill="#ED7100"/><text x="269" y="639">Compute</text>
+    <rect x="340" y="628" width="13" height="13" rx="3" fill="#E7157B"/><text x="359" y="639">Integration</text>
+    <rect x="446" y="628" width="13" height="13" rx="3" fill="#CD2264"/><text x="465" y="639">Management</text>
+    <rect x="560" y="628" width="13" height="13" rx="3" fill="#3F8624"/><text x="579" y="639">Storage</text>
+    <rect x="640" y="628" width="13" height="13" rx="3" fill="#8C4FFF"/><text x="659" y="639">Networking</text>
+  </g>
+  <text x="628" y="668" text-anchor="middle" font-size="10" fill="#5A6B7B">Solid = data path · Grey dashed = logs/telemetry</text>
+</svg>

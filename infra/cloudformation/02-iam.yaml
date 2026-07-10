@@ -1,0 +1,147 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  AI Agent Platform — IAM foundation (Milestone 2).
+  Least-privilege roles for the platform's EC2 compute and its placeholder
+  Lambda, plus the instance profile that binds the EC2 role to the instance.
+  No wildcard resource ARNs: every permission is scoped to a specific resource
+  or to a resource-name prefix owned by this project and environment.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aiap
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Lower-case project prefix. Must match the other stacks.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment. Must match the other stacks.
+
+Resources:
+  # -------------------------------------------------------------------------
+  # EC2 instance role. It grants exactly three capabilities, and nothing else:
+  #   1. SSM Session Manager, so the instance is managed without an SSH port.
+  #   2. Read/write to this project's artifact bucket only.
+  #   3. Ship logs to this project's log groups only.
+  # -------------------------------------------------------------------------
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-instance-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      # AWS-managed policy for SSM. It is the AWS-recommended, tightly-scoped
+      # way to enable Session Manager, and replaces an inbound SSH rule.
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      Policies:
+        - PolicyName: artifact-bucket-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # List is scoped to the one bucket; object actions to its contents.
+              - Sid: ListArtifactBucket
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-${Environment}-artifacts-${AWS::AccountId}-${AWS::Region}"
+              - Sid: ReadWriteArtifactObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-${Environment}-artifacts-${AWS::AccountId}-${AWS::Region}/*"
+        - PolicyName: platform-logging
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Scoped to this project's log-group namespace, not to all logs.
+              - Sid: WritePlatformLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${ProjectName}/${Environment}/*"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${ProjectName}/${Environment}/*:log-stream:*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-instance-role"
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${ProjectName}-${Environment}-instance-profile"
+      Roles:
+        - !Ref InstanceRole
+
+  # -------------------------------------------------------------------------
+  # Lambda execution role. Logging only, scoped to this project's Lambda log
+  # groups. It replaces the broad AWS-managed basic-execution policy (which
+  # permits CreateLogGroup on any name) with a name-scoped inline policy.
+  # -------------------------------------------------------------------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: lambda-logging
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CreateLambdaLogGroup
+                Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-*"
+              - Sid: WriteLambdaLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-*:*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-role"
+
+Outputs:
+  InstanceRoleArn:
+    Description: ARN of the EC2 instance role.
+    Value: !GetAtt InstanceRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-InstanceRoleArn"
+
+  InstanceProfileArn:
+    Description: ARN of the EC2 instance profile.
+    Value: !GetAtt InstanceProfile.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-InstanceProfileArn"
+
+  InstanceProfileName:
+    Description: Name of the EC2 instance profile.
+    Value: !Ref InstanceProfile
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-InstanceProfileName"
+
+  LambdaExecutionRoleArn:
+    Description: ARN of the Lambda execution role.
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-LambdaExecutionRoleArn"
