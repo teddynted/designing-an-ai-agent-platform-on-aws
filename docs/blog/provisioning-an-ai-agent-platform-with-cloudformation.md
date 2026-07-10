@@ -297,18 +297,18 @@ The foundation is designed to cost almost nothing at rest, through five choices:
    effectively nothing at the foundation's volumes.
 4. **Disposable infrastructure** — no idle EBS, no orphaned volumes, no
    always-on managed database.
-5. **Appropriate sizing** — a modest `t3.large` for the foundation, with GPU
-   types chosen only when Ollama needs them.
+5. **Appropriate sizing** — a `t3.micro` for the foundation (free-tier
+   eligible), sized up only if a workload ever needs it.
 
 A rough development estimate (`us-east-1`, part-time use):
 
 | Resource | Est. monthly (USD) |
 | --- | --- |
-| EC2 Spot (`t3.large`, part-time) | ~$5–18 |
-| Root EBS (30 GiB gp3) | ~$2.40 |
+| EC2 (`t3.micro`) | ~$0 on the free tier; else ~$0–8 |
+| Root EBS (30 GiB gp3) | ~$0 on the free tier; else ~$2.40 |
 | S3, Lambda, EventBridge, CloudWatch | <$2 combined |
 | VPC / IGW / SG / routes (no NAT) | $0 |
-| **Total** | **~$10–25 / month** |
+| **Total** | **~$0–12 / month** (near $0 on the free tier) |
 
 Stop the instance overnight and it drops further. The architecture's resting
 cost trends toward the cost of its storage — which is the goal.

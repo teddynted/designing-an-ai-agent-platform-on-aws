@@ -171,7 +171,7 @@ are tuned for a low-cost development environment.
 | `Environment` | `dev` | all | `dev` \| `staging` \| `prod`. |
 | `VpcCidr` | `10.20.0.0/16` | network | Room for future subnets. |
 | `PublicSubnetCidr` | `10.20.1.0/24` | network | The foundation's single subnet. |
-| `InstanceType` | `t3.large` | compute | GPU types are chosen when Ollama arrives. |
+| `InstanceType` | `t3.micro` | compute | Free-tier eligible. Raise it only to run real model workloads. |
 | `PurchaseOption` | `spot` | compute | `spot` or `on-demand`. Use `on-demand` if the account's Spot quota is zero. |
 | `RootVolumeSize` | `30` | compute | GiB. OS and runtime temp only. |
 | `SshKeyName` | *(empty)* | compute | Empty disables SSH; use SSM Session Manager. |
@@ -182,22 +182,24 @@ are tuned for a low-cost development environment.
 ## Cost
 
 Designed to cost almost nothing at rest. Rough **development** estimate
-(`us-east-1`, one `t3.large` Spot instance, light use):
+(`us-east-1`, one `t3.micro` instance, light use):
 
 | Resource | Basis | Est. monthly (USD) |
 | --- | --- | --- |
-| EC2 Spot (`t3.large`) | ~70% off On-Demand; ~$0.025/hr, run part-time | ~$5–18 |
-| Root EBS (30 GiB gp3) | $0.08/GiB-month | ~$2.40 |
+| EC2 (`t3.micro`) | free-tier eligible (750 hrs/mo, year 1); else ~$0.01/hr on-demand | ~$0–8 |
+| Root EBS (30 GiB gp3) | free tier covers 30 GiB (year 1); else $0.08/GiB-month | ~$0–2.40 |
 | S3 (artifacts) | a few GiB + requests | <$1 |
 | Lambda | placeholder, near-zero invocations | ~$0 (free tier) |
 | EventBridge | custom bus, low event volume | ~$0 |
 | CloudWatch Logs | low volume, 14-day retention | <$1 |
 | VPC / IGW / SG / routes | no NAT gateway | $0 |
-| **Total** | | **~$10–25 / month** |
+| **Total** | | **~$0–12 / month** (near $0 on the free tier) |
 
-The single largest saving is architectural: a **public subnet with no NAT
-gateway** avoids ~$32/month per NAT. Running the Spot instance only when needed
-(stop the stack overnight) drops the total further. There are no always-on
+`t3.micro` is free-tier eligible, so on a first-year account the compute and its
+volume are effectively free. The single largest *architectural* saving is a
+**public subnet with no NAT gateway**, which avoids ~$32/month per NAT. Stopping
+the instance when it is not needed drops the total further. There are no
+always-on
 managed services in the foundation.
 
 ## Security overview
@@ -222,7 +224,7 @@ Full reasoning: the blog's [Security](../docs/blog/provisioning-an-ai-agent-plat
 quota is zero or too low — common on new accounts. Two fixes:
 
 - *Proper fix (keep Spot):* request a Spot quota increase, then redeploy. The
-  quota is measured in vCPUs; a `t3.large` needs 2.
+  quota is measured in vCPUs; a `t3.micro` needs 2.
 
   ```bash
   aws service-quotas request-service-quota-increase \
