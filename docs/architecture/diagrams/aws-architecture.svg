@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1120" width="1440" height="1120" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
-  <title>AI Agent Platform on AWS — infrastructure architecture</title>
+  <title>AI Agent Platform on AWS — Milestone 1 architecture</title>
   <desc>Three-plane architecture: control plane (serverless), agent plane (stateful, private subnets), inference plane (Spot GPU plus Bedrock). Single region, two Availability Zones.</desc>
 
   <style>
@@ -48,7 +48,7 @@
   <rect class="canvas" width="1440" height="1120"/>
 
   <text class="t-title" x="24" y="30">AI Agent Platform on AWS</text>
-  <text class="t-sub" x="24" y="47">Initial architecture · single region, two Availability Zones · Spot where interruption is free, state where it survives</text>
+  <text class="t-sub" x="24" y="47">Milestone 1 — initial architecture · single region, two Availability Zones · Spot where interruption is free, state where it survives</text>
 
   <!-- ============ EXTERNAL ============ -->
   <rect class="box box-ext" x="24" y="60" width="1392" height="72" rx="6"/>

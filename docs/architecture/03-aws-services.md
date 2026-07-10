@@ -130,15 +130,15 @@ flowchart TB
 | **EKS / ECS for the whole platform** | Control-plane overhead exceeds the benefit at this component count. Fargate used only for the stateless Model Gateway. |
 | **SageMaker endpoints** | Overlaps Bedrock (managed) and Ollama (self-hosted) without displacing either; adds a third inference operating model. Reconsider for custom fine-tuned models ([11 — Extensibility](11-extensibility.md)). |
 | **Step Functions** | n8n *is* the workflow orchestrator. Two orchestrators is one too many. Step Functions is a reasonable choice for *control-plane* sagas if Lambda reactors grow stateful. |
-| **API Gateway** | ALB already fronts n8n and supports the required paths. API Gateway earns its place when we need per-consumer throttling, API keys, and usage plans — a later concern. |
+| **API Gateway** | ALB already fronts n8n and supports the required paths. API Gateway earns its place when we need per-consumer throttling, API keys, and usage plans — a Milestone 3+ concern. |
 | **AWS Batch** | Overlaps the SQS + Spot ASG pattern already needed for scale-to-zero inference. |
 | **Bedrock Agents / Knowledge Bases** | Would duplicate OpenClaw's agent loop and n8n's orchestration. Deliberately kept as an *option behind the Model Gateway seam*, not a foundation. |
 
 ## 3.4 Facts to re-verify at implementation
 
-Constraints below are load-bearing and were confirmed during design. Cloud pricing and limits move; re-check before implementation.
+Constraints below are load-bearing and were confirmed during design. Cloud pricing and limits move; re-check in Milestone 2.
 
 - **ASG warm pools do not support Spot Instances.** They now support mixed-instances policies for *On-Demand* types only (Nov 2025). This eliminates warm pools as a cold-start strategy for the Ollama Spot fleet and is the reason [ADR-0006](../adr/0006-startup-time-strategy.md) leans on baked AMIs and pre-staged snapshots instead.
 - **EBS Fast Snapshot Restore is billed per snapshot, per AZ, per hour** (≈ $0.75/DSU-hour, ≈ $540/month per snapshot per AZ). It is a cold-start accelerator with a standing cost, not a free optimisation. Enable selectively; see [09 — Cost](09-cost.md).
-- **Bedrock batch inference pricing and prompt-caching discounts** — assumed materially cheaper than on-demand token pricing for bulk workloads. *Not independently re-verified during design.* Confirm current rates before relying on the bulk-routing economics in [09 — Cost](09-cost.md).
+- **Bedrock batch inference pricing and prompt-caching discounts** — assumed materially cheaper than on-demand token pricing for bulk workloads. *Not independently re-verified during this milestone.* Confirm current rates before relying on the bulk-routing economics in [09 — Cost](09-cost.md).
 - **n8n queue-mode broker requirements** — assumed Redis-backed with stateless workers. Confirm against current n8n documentation before finalising the worker ASG design.

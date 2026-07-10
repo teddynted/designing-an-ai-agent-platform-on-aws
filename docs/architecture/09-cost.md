@@ -1,6 +1,6 @@
 # 9. Cost Optimisation
 
-> ⚠ **All figures below are illustrative order-of-magnitude estimates** for `us-east-1`, used to compare *architectural options* rather than to forecast a bill. AWS pricing changes; Bedrock token pricing and batch discounts were **not independently re-verified during design**. Re-cost before committing. The *ratios* are the durable content here, not the absolute numbers.
+> ⚠ **All figures below are illustrative order-of-magnitude estimates** for `us-east-1`, used to compare *architectural options* rather than to forecast a bill. AWS pricing changes; Bedrock token pricing and batch discounts were **not independently re-verified during this milestone**. Re-cost before committing. The *ratios* are the durable content here, not the absolute numbers.
 
 ## 9.1 The cost shape of an agent platform
 
@@ -90,7 +90,7 @@ Additional Bedrock-side levers, in order of impact:
 3. **Batch inference** for latency-tolerant bulk work.
 4. **Context hygiene.** Agent loops resend history each turn; cost grows quadratically with conversation length unless trimmed or summarised.
 
-> ⚠ Prompt-caching and batch-inference discount rates were not verified during design. Confirm current rates before relying on them.
+> ⚠ Prompt-caching and batch-inference discount rates were not verified in this milestone. Confirm current rates before relying on them.
 
 ## 9.5 Governing the unbounded cost
 
@@ -131,4 +131,4 @@ The first and last rows are the two that produce a bill nobody can explain. Alar
 - **Multi-AZ NAT in prod (~$33/mo extra).** Single-NAT saves the money and makes one AZ's egress depend on another AZ's health. Not worth it in prod. Taken in dev.
 - **RDS Multi-AZ (~2× single-AZ).** Bought outright. n8n's workflow and credential store is the platform's second-most-painful data-loss event.
 - **EFS over EBS for the Gateway.** More expensive per GB and slower. Bought because it converts an unrecoverable-by-automation AZ failure into a 3–5 minute relaunch ([07 — HA](07-scalability-and-ha.md)).
-- **Savings Plans / Reserved Instances.** Deliberately deferred: the On-Demand baseline is small (three instances) and the architecture is young. Commit once the baseline is stable. Committing early to a shape you are about to change is how you pay for instances you no longer run.
+- **Savings Plans / Reserved Instances.** Deliberately deferred: the On-Demand baseline is small (three instances) and the architecture is young. Commit once the baseline is stable — probably Milestone 3. Committing early to a shape you are about to change is how you pay for instances you no longer run.

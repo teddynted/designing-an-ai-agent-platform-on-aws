@@ -1,5 +1,5 @@
 """
-AI Agent Platform on AWS — infrastructure architecture, rendered with the official AWS icon set.
+AI Agent Platform on AWS — Milestone 1 architecture, rendered with the official AWS icon set.
 
 Generates: aws-architecture.png
 
@@ -48,7 +48,7 @@ DASHED = Edge(color="#8B5CF6", style="dashed")
 
 def build() -> None:
     with Diagram(
-        "AI Agent Platform on AWS",
+        "AI Agent Platform on AWS — Milestone 1",
         filename="docs/architecture/diagrams/aws-architecture",
         outformat="png",
         show=False,

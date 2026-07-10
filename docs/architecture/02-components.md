@@ -66,7 +66,7 @@ flowchart LR
 
 n8n runs in **queue mode**, which separates the stateful `main` process from stateless execution workers. This is the single configuration choice that makes n8n Spot-compatible at all.
 
-> **Verify at implementation:** queue mode's exact broker requirements (Redis/Bull) and whether dedicated *webhook processor* instances are warranted at our traffic volume. Confirm against current n8n docs before the worker ASG is built.
+> **Verify at implementation:** queue mode's exact broker requirements (Redis/Bull) and whether dedicated *webhook processor* instances are warranted at our traffic volume. Confirm against current n8n docs in Milestone 2.
 
 ### n8n `worker`
 
@@ -138,7 +138,7 @@ Why it earns its place, despite the added hop:
 
 What it costs: one extra network hop (single-digit ms, internal), one more component to operate, and a hot-path dependency.
 
-The seam is defined now; the router is built once a second provider or a budget breach justifies it ([ADR-0003](../adr/0003-model-gateway-seam.md)). Until then, callers speak the same contract directly to Bedrock.
+The seam is defined in Milestone 1; the router is built once a second provider or a budget breach justifies it ([ADR-0003](../adr/0003-model-gateway-seam.md)). Until then, callers speak the same contract directly to Bedrock.
 
 ### Ollama (self-hosted inference)
 
