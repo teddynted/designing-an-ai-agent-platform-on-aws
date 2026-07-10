@@ -23,3 +23,7 @@ releases:
     status: released
     date: "2026-07-10"
     summary: "A Go release-management module: SemVer arithmetic, changelog generation from commit history, annotated tagging, and GitHub release publication. Repository tooling; it delivers no architectural milestone."
+  - version: 0.2.1
+    title: v0.2.1
+    status: released
+    date: "2026-07-10"
