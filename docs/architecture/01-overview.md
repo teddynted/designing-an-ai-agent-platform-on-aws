@@ -34,18 +34,6 @@ Three theses carry the rest of the design:
 
 ## 1.3 High-level architecture
 
-### Infrastructure view
-
-Services, subnets, and Availability Zones as deployed:
-
-![AI Agent Platform on AWS — infrastructure architecture](diagrams/aws-architecture.svg)
-
-<sub>Source and regeneration notes: [`diagrams/`](diagrams/README.md). Where this diagram and this document disagree, the document wins.</sub>
-
-### Logical view
-
-The same system, arranged by plane rather than by subnet:
-
 ```mermaid
 flowchart TB
     subgraph ext["External"]
