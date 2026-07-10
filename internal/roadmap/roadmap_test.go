@@ -126,6 +126,112 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+// commented is the sample with the header block the real RELEASES.yaml carries.
+const commented = `# The release roadmap.
+#
+# Versions and milestones are two sequences, not one.
+
+releases:
+  - version: 0.2.0
+    title: Release management
+    status: planned
+  - version: 0.1.0
+    title: Initial architecture
+    status: released
+    date: 2026-07-09
+    milestone: 1
+`
+
+// Comments are the reason this file is YAML rather than JSON. Marshalling a
+// struct back to YAML reconstructs the document from the data alone, which
+// deletes them — so the first release would erase the header explaining the
+// file, and every later one would erase whatever a human wrote since.
+func TestMarshalPreservesComments(t *testing.T) {
+	registry, err := roadmap.Parse([]byte(commented))
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	data, err := registry.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	out := string(data)
+
+	for _, want := range []string{
+		"# The release roadmap.",
+		"# Versions and milestones are two sequences, not one.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Marshal dropped the comment %q:\n%s", want, out)
+		}
+	}
+	if _, err := roadmap.Parse(data); err != nil {
+		t.Errorf("our own commented output should re-parse: %v", err)
+	}
+}
+
+// The whole point: a release must not silently delete the file's documentation.
+func TestMarkReleasedPreservesComments(t *testing.T) {
+	registry, err := roadmap.Parse([]byte(commented))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.MarkReleased(version.MustParse("0.2.0"), "Release management", release.MustDate("2026-07-10")); err != nil {
+		t.Fatalf("MarkReleased returned error: %v", err)
+	}
+
+	data, err := registry.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(data)
+
+	if !strings.Contains(out, "# The release roadmap.") {
+		t.Errorf("marking a release deleted the header:\n%s", out)
+	}
+	if !strings.Contains(out, "status: released") {
+		t.Errorf("the release was not marked:\n%s", out)
+	}
+
+	reparsed, err := roadmap.Parse(data)
+	if err != nil {
+		t.Fatalf("re-parsing failed: %v", err)
+	}
+	if got := reparsed.Find(version.MustParse("0.2.0")); got == nil || !got.IsReleased() {
+		t.Errorf("0.2.0 should be released after a round trip: %v", got)
+	}
+}
+
+// Sequence items are indented under their key, as a person writes them.
+func TestMarshalIndentsSequenceItems(t *testing.T) {
+	registry, err := roadmap.Parse([]byte(commented))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := registry.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "\n  - version:") {
+		t.Errorf("sequence items should be indented under `releases:`:\n%s", data)
+	}
+}
+
+// A Registry built in code has no comments to re-emit, and must still marshal.
+func TestMarshalWithoutComments(t *testing.T) {
+	registry := &roadmap.Registry{Releases: []release.Release{
+		{Version: version.MustParse("0.3.0"), Title: "Next", Status: release.Planned},
+	}}
+	data, err := registry.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if _, err := roadmap.Parse(data); err != nil {
+		t.Errorf("output should re-parse: %v", err)
+	}
+}
+
 // A planned release has no date, and the field must not be emitted as an empty
 // string that then fails to parse.
 func TestMarshalOmitsAbsentDate(t *testing.T) {

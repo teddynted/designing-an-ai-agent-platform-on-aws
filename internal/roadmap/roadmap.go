@@ -10,6 +10,18 @@
 // goccy/go-yaml rather than gopkg.in/yaml.v3 because the latter is effectively
 // unmaintained. This is the module's only third-party dependency; the reasoning
 // is recorded in ADR-0013.
+//
+// Because comments are the reason for choosing YAML, they must survive a
+// release. Marshalling a struct back to YAML reconstructs the document from the
+// data and silently discards everything that is not data, so a Registry carries
+// the comments it was parsed with and re-emits them on Save. Without this, the
+// first release deletes the header explaining the file, and every subsequent one
+// deletes whatever a human wrote since.
+//
+// Comments are keyed by document path, so a comment on `$.releases[1]` follows
+// the second entry rather than the release it was written about. Appending a
+// release is safe — entries sort ascending and a newer version lands last —
+// but inserting one before a commented entry would move that comment.
 package roadmap
 
 import (
@@ -50,16 +62,22 @@ type document struct {
 // ascending by version.
 type Registry struct {
 	Releases []release.Release
+
+	// comments are the ones Parse found, re-emitted by Marshal. A Registry
+	// built in code rather than parsed simply has none.
+	comments yaml.CommentMap
 }
 
-// Parse reads a registry from YAML, validating each entry.
+// Parse reads a registry from YAML, validating each entry and retaining the
+// document's comments.
 func Parse(data []byte) (*Registry, error) {
 	var doc document
-	if err := yaml.Unmarshal(data, &doc); err != nil {
+	comments := yaml.CommentMap{}
+	if err := yaml.UnmarshalWithOptions(data, &doc, yaml.CommentToMap(comments)); err != nil {
 		return nil, fmt.Errorf("%s is not valid YAML: %w", Filename, err)
 	}
 
-	registry := &Registry{}
+	registry := &Registry{comments: comments}
 	seen := map[string]bool{}
 
 	for i, e := range doc.Releases {
@@ -124,7 +142,14 @@ func (r *Registry) Marshal() ([]byte, error) {
 		}
 		doc.Releases = append(doc.Releases, e)
 	}
-	data, err := yaml.Marshal(doc)
+	// IndentSequence so a sequence item is indented under its key, which is how
+	// a person writes it and therefore how the file arrived.
+	options := []yaml.EncodeOption{yaml.Indent(2), yaml.IndentSequence(true)}
+	if len(r.comments) > 0 {
+		options = append(options, yaml.WithComment(r.comments))
+	}
+
+	data, err := yaml.MarshalWithOptions(doc, options...)
 	if err != nil {
 		return nil, fmt.Errorf("could not render %s: %w", Filename, err)
 	}
