@@ -339,6 +339,26 @@ func TestBuildHighlightsComeFromTheRoadmap(t *testing.T) {
 	}
 }
 
+// A roadmap entry that lists highlights but no summary keeps its highlights. The
+// summary falls back on its own; the two are not all-or-nothing.
+func TestBuildKeepsRoadmapHighlightsWithoutASummary(t *testing.T) {
+	repo := &fakeRepo{commits: []git.Commit{{SHA: "a", Subject: "Add a thing", Author: "Teddy", Parents: []string{"r"}}}}
+	input := baseInput()
+	input.Roadmap = &release.Release{
+		Version:    version.MustParse("0.2.0"),
+		Title:      "Release management",
+		Highlights: []string{"SemVer arithmetic"},
+	}
+
+	notes := mustBuild(t, releasenotes.NewBuilder(repo, nil, nil), input)
+	if len(notes.Highlights) != 1 || notes.Highlights[0] != "SemVer arithmetic" {
+		t.Errorf("Highlights = %v, want the roadmap's", notes.Highlights)
+	}
+	if want := "1 commit from 1 contributor, across 1 file."; notes.Summary != want {
+		t.Errorf("Summary = %q, want the fallback %q", notes.Summary, want)
+	}
+}
+
 // With no roadmap prose, the fallback states measurements rather than inventing
 // a narrative.
 func TestBuildFallbackSummaryStatesFactsOnly(t *testing.T) {
