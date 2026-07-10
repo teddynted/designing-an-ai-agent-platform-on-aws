@@ -4,10 +4,8 @@ Two renderings of the same architecture, for two different jobs.
 
 | Artifact | Job | Renders on GitHub | Icons |
 |---|---|---|---|
-| [`aws-architecture.svg`](aws-architecture.svg) | Inline documentation | ✅ light **and** dark | Custom-drawn glyphs, approximate AWS palette |
+| [`aws-architecture.svg`](aws-architecture.svg) | Inline documentation | ✅ light **and** dark | Approximated AWS category palette |
 | [`aws_architecture.py`](aws_architecture.py) → `aws-architecture.png` | Slides, exports, presentation | as a committed PNG | **Official AWS icon set** |
-
-The SVG's glyphs are hand-drawn `<symbol>` definitions that *evoke* the AWS icon set — a chip for EC2, a bucket for S3, a λ for Lambda — rather than reproducing it. AWS's actual icons are a licensed asset pack, and embedding them would bloat the file and bind it to their terms. The PNG path exists precisely for when you need the real ones.
 
 Both depict the architecture specified in [`docs/architecture/`](../). **Where a diagram and those documents disagree, the documents win.** A diagram is a view, not a source of truth.
 
