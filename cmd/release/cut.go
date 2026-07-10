@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/changelog"
@@ -33,28 +35,46 @@ func bumpCommand(ctx context.Context, bump semver.Bump, args []string) error {
 	p := newPrinter(os.Stdout, os.Stderr, useColor(opts.noColor, os.Stderr))
 	svc := release.New(opts.config())
 
-	p.step("Validating the repository")
+	if opts.dryRun {
+		p.dryRunBanner()
+		p.blank()
+	}
+
+	p.info("Validating the repository")
 	plan, err := svc.Plan(ctx, bump, opts.prerelease)
 	if err != nil {
 		return err
 	}
-	p.ok("Preflight checks passed")
+	p.success("Preflight checks passed")
 	p.blank()
+
+	stats := changelog.NewData(plan.Release(), opts.categories()).Stats
 
 	printPlan(p, plan)
 	p.blank()
+	printActions(p, plannedActions(plan, &opts), opts.dryRun)
+	p.blank()
+	printStatistics(p, stats)
 
 	if opts.dryRun {
-		p.warn("Dry run: no tag was created")
 		p.blank()
 		p.heading("Release notes preview")
-		fmt.Fprintln(p.out, changelog.RenderNotes(plan.Release(time.Now().UTC()), changelog.DefaultSections()))
+
+		notes, err := opts.renderNotes(plan.Release())
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(p.out, notes)
+
+		p.blank()
+		p.warn("Dry run: nothing was created, pushed, or published")
 		return nil
 	}
 
 	// Prompting only makes sense when a human is watching. In CI, or when the
 	// output is piped, --yes is implied.
 	if !opts.yes && isTerminal(os.Stdin) && isTerminal(os.Stderr) {
+		p.blank()
 		question := fmt.Sprintf("Create and push %s?", plan.Tag)
 		if opts.noPush {
 			question = fmt.Sprintf("Create %s locally?", plan.Tag)
@@ -66,25 +86,25 @@ func bumpCommand(ctx context.Context, bump semver.Bump, args []string) error {
 		if !agreed {
 			return errAborted
 		}
-		p.blank()
 	}
+	p.blank()
 
 	if err := svc.Apply(ctx, plan, !opts.noPush); err != nil {
 		return err
 	}
-	p.ok("Created annotated tag %s", plan.Tag)
+	p.success("Created annotated tag %s", plan.Tag)
 
 	if opts.noPush {
 		p.warn("The tag was not pushed")
-		p.info("Push it with: git push %s %s", opts.remote, plan.Tag)
+		p.note("Push it with: git push %s %s", opts.remote, plan.Tag)
 		return nil
 	}
 
-	p.ok("Pushed %s to %s", plan.Tag, opts.remote)
+	p.success("Pushed %s to %s", plan.Tag, opts.remote)
 	p.blank()
-	p.info("GitHub Actions will now generate the changelog and publish the release.")
-	if plan.Repo.Owner != "" {
-		p.info("Watch it at https://%s/%s/%s/actions", plan.Repo.Host, plan.Repo.Owner, plan.Repo.Name)
+	p.info("GitHub Actions will now generate the changelog and publish the release")
+	if plan.Repo.Known() {
+		p.note("Watch it at https://%s/%s/%s/actions", plan.Repo.Host, plan.Repo.Owner, plan.Repo.Name)
 	}
 	return nil
 }
@@ -93,31 +113,80 @@ func bumpCommand(ctx context.Context, bump semver.Bump, args []string) error {
 func printPlan(p *printer, plan *release.Plan) {
 	p.heading("Release plan")
 
-	if plan.Repo.Owner != "" {
-		p.field("Repository", "%s/%s", plan.Repo.Owner, plan.Repo.Name)
+	rows := make([]row, 0, 6)
+	if plan.Repo.Known() {
+		rows = append(rows, row{label: "Repository", value: plan.Repo.Owner + "/" + plan.Repo.Name})
 	}
-	p.field("Branch", "%s", plan.Branch)
+	rows = append(rows, row{label: "Branch", value: plan.Branch})
 
+	current := plan.PreviousTag
 	if plan.IsFirstRelease() {
-		p.field("Current", "none, this is the first release")
-	} else {
-		p.field("Current", "%s", plan.PreviousTag)
+		current = "none, this is the first release"
 	}
-
-	next := fmt.Sprintf("%s  (%s)", plan.Tag, plan.Bump)
-	if plan.Next.IsPrerelease() {
-		next += "  pre-release"
-	}
-	p.field("Next", "%s", p.paint(ansiBold, next))
-
-	p.field("Commits", "%s", pluralise(len(plan.Commits), "commit", "commits"))
+	rows = append(rows,
+		row{label: "Current", value: current},
+		row{label: "Next", value: fmt.Sprintf("%s (%s)", plan.Tag, plan.Bump), bold: true},
+		row{label: "Commits", value: strconv.Itoa(len(plan.Commits))},
+		row{label: "Release Date", value: plan.Date.Format(time.DateOnly)},
+	)
+	p.table(rows)
 }
 
-func pluralise(n int, one, many string) string {
-	if n == 1 {
-		return fmt.Sprintf("%d %s", n, one)
+// plannedActions lists what the release will do, in order, phrased as lower-case
+// infinitives so that both the confirmed and the "would" forms read naturally.
+//
+// The list reflects the flags: nothing is promised that will not happen.
+func plannedActions(plan *release.Plan, opts *releaseFlags) []string {
+	actions := []string{fmt.Sprintf("create Git tag %s", plan.Tag)}
+
+	// Without a pushed tag nothing downstream is triggered, so the list stops
+	// here rather than promising a release that will never appear.
+	if opts.noPush {
+		return actions
 	}
-	return fmt.Sprintf("%d %s", n, many)
+	return append(actions,
+		fmt.Sprintf("push tag to %s", opts.remote),
+		"generate release notes",
+		"create GitHub Release",
+	)
+}
+
+func printActions(p *printer, actions []string, dryRun bool) {
+	p.heading("Planned Actions")
+	for _, action := range actions {
+		if dryRun {
+			p.bullet("Would %s", action)
+		} else {
+			p.success("%s", capitalise(action))
+		}
+	}
+}
+
+// printStatistics summarises the release by category. Categories with no commits
+// are omitted rather than shown as zero.
+func printStatistics(p *printer, stats changelog.Stats) {
+	p.heading("Release Statistics")
+
+	rows := make([]row, 0, len(stats.Counts)+3)
+	if stats.Bump != "" {
+		rows = append(rows, row{label: "Version Bump", value: capitalise(stats.Bump)})
+	}
+	rows = append(rows, row{label: "Commits", value: strconv.Itoa(stats.Commits)})
+	if stats.Breaking > 0 {
+		rows = append(rows, row{label: "Breaking", value: strconv.Itoa(stats.Breaking), bold: true})
+	}
+	for _, c := range stats.Counts {
+		rows = append(rows, row{label: c.Label, value: strconv.Itoa(c.N)})
+	}
+	p.table(rows)
+}
+
+// capitalise upper-cases the first letter of an ASCII phrase.
+func capitalise(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // checkCommand implements `release check`: the preflight validations on their
@@ -142,12 +211,12 @@ func checkCommand(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	p.ok("Inside a git repository")
-	p.ok("On a release branch: %s", branch)
+	p.success("Inside a git repository")
+	p.success("On a release branch: %s", branch)
 	if opts.allowDirty {
 		p.warn("Working tree check skipped by --allow-dirty")
 	} else {
-		p.ok("Working tree is clean")
+		p.success("Working tree is clean")
 	}
 
 	latest, err := svc.LatestTag(ctx)
@@ -155,9 +224,9 @@ func checkCommand(ctx context.Context, args []string) error {
 		return err
 	}
 	if latest == "" {
-		p.ok("No release tags yet; the next release will be the first")
+		p.success("No release tags yet; the next release will be the first")
 	} else {
-		p.ok("Latest release tag: %s", latest)
+		p.success("Latest release tag: %s", latest)
 	}
 	return nil
 }

@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -76,5 +78,42 @@ func TestStringSlice(t *testing.T) {
 	s.Set("b")
 	if got := s.String(); got != "a,b" {
 		t.Errorf("String() = %q, want a,b", got)
+	}
+}
+
+func TestTemplateFlagIsOptional(t *testing.T) {
+	opts := parseFlags(t, nil)
+	renderOpts, err := opts.renderOptions()
+	if err != nil {
+		t.Fatalf("renderOptions: %v", err)
+	}
+	if renderOpts.Template != nil {
+		t.Error("without --template the built-in layout should be used")
+	}
+	if len(renderOpts.Categories) == 0 {
+		t.Error("the default categories should always be supplied")
+	}
+}
+
+func TestTemplateFlagLoadsAFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notes.tmpl")
+	if err := os.WriteFile(path, []byte("{{.Tag}}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := parseFlags(t, []string{"--template", path})
+	renderOpts, err := opts.renderOptions()
+	if err != nil {
+		t.Fatalf("renderOptions: %v", err)
+	}
+	if renderOpts.Template == nil {
+		t.Error("--template should load the file")
+	}
+}
+
+func TestTemplateFlagReportsAMissingFile(t *testing.T) {
+	opts := parseFlags(t, []string{"--template", filepath.Join(t.TempDir(), "nope.tmpl")})
+	if _, err := opts.renderOptions(); err == nil {
+		t.Error("a missing template file should be reported")
 	}
 }

@@ -113,6 +113,9 @@ type Plan struct {
 	PreviousTag string
 	Tag         string
 
+	// Date is when the release was planned, in UTC.
+	Date time.Time
+
 	Commits []changelog.Commit
 	Repo    changelog.Repository
 }
@@ -120,15 +123,16 @@ type Plan struct {
 // IsFirstRelease reports whether the repository has no prior release tag.
 func (p *Plan) IsFirstRelease() bool { return p.PreviousTag == "" }
 
-// Release converts the plan into the input for rendering notes.
-func (p *Plan) Release(date time.Time) changelog.Release {
+// Release converts the plan into the input for rendering notes and statistics.
+func (p *Plan) Release() changelog.Release {
 	return changelog.Release{
 		Tag:         p.Tag,
 		Version:     p.Next,
 		PreviousTag: p.PreviousTag,
-		Date:        date,
+		Date:        p.Date,
 		Repo:        p.Repo,
 		Commits:     p.Commits,
+		Bump:        p.Bump.String(),
 	}
 }
 
@@ -139,7 +143,7 @@ const detachedHead = "(detached HEAD)"
 // Check runs the preflight validations without calculating a version. It is
 // what `release check` calls, and what Plan runs first.
 func (s *Service) Check(ctx context.Context) (branch string, err error) {
-	if err := s.git.EnsureRepository(ctx); err != nil {
+	if err := s.ensureRepository(ctx); err != nil {
 		return "", err
 	}
 
@@ -151,13 +155,31 @@ func (s *Service) Check(ctx context.Context) (branch string, err error) {
 	// is how a dry run works on a pull request's merge commit.
 	case errors.Is(err, git.ErrDetachedHead) && len(s.cfg.Branches) == 0:
 		branch = detachedHead
+	case errors.Is(err, git.ErrDetachedHead):
+		return "", &Error{
+			Cause: err,
+			What:  "HEAD is detached, so there is no branch to release from.",
+			Why:   "This happens after checking out a tag or a specific commit.",
+			Solutions: []string{
+				"return to the default branch: git switch main",
+				"release from any ref with --any-branch",
+			},
+		}
 	default:
 		return "", fmt.Errorf("determining the current branch: %w", err)
 	}
 
 	if !s.branchAllowed(branch) {
-		return branch, fmt.Errorf("%w: on %q, expected one of %s",
-			ErrBranchNotAllowed, branch, strings.Join(s.cfg.Branches, ", "))
+		return branch, &Error{
+			Cause: ErrBranchNotAllowed,
+			What:  fmt.Sprintf("Releases are not allowed from branch %q.", branch),
+			Why:   fmt.Sprintf("Allowed branches: %s.", strings.Join(s.cfg.Branches, ", ")),
+			Solutions: []string{
+				"switch to the default branch: git switch main",
+				fmt.Sprintf("permit this branch: --branch %s", branch),
+				"permit any branch: --any-branch",
+			},
+		}
 	}
 
 	if !s.cfg.AllowDirty {
@@ -166,10 +188,39 @@ func (s *Service) Check(ctx context.Context) (branch string, err error) {
 			return branch, fmt.Errorf("reading the working tree status: %w", err)
 		}
 		if len(status) > 0 {
-			return branch, fmt.Errorf("%w:\n  %s", ErrDirtyWorkTree, strings.Join(status, "\n  "))
+			return branch, &Error{
+				Cause: ErrDirtyWorkTree,
+				What:  "The working tree has uncommitted changes.",
+				Why:   "A release must describe a commit, so the tree has to be clean:\n\n" + indent(status),
+				Solutions: []string{
+					"commit the changes",
+					"set them aside: git stash",
+					"ignore build output by adding it to .gitignore",
+					"release anyway: --allow-dirty",
+				},
+			}
 		}
 	}
 	return branch, nil
+}
+
+// ensureRepository verifies that the tool is running somewhere it can work.
+func (s *Service) ensureRepository(ctx context.Context) error {
+	if err := s.git.EnsureRepository(ctx); err != nil {
+		where := s.cfg.Dir
+		if where == "" {
+			where = "the working directory"
+		}
+		return &Error{
+			Cause: err,
+			What:  fmt.Sprintf("%s is not inside a Git repository.", where),
+			Solutions: []string{
+				"change into the repository",
+				"point the tool at one: --dir /path/to/repo",
+			},
+		}
+	}
+	return nil
 }
 
 // branchAllowed matches a branch against the configured patterns.
@@ -228,7 +279,16 @@ func (s *Service) Plan(ctx context.Context, bump semver.Bump, prerelease string)
 		return nil, fmt.Errorf("checking whether %s exists: %w", tag, err)
 	}
 	if exists {
-		return nil, fmt.Errorf("%w: %s", ErrTagExists, tag)
+		return nil, &Error{
+			Cause: ErrTagExists,
+			What:  fmt.Sprintf("Tag %q already exists.", tag),
+			Why:   fmt.Sprintf("A %s bump from %s lands on a version that is already tagged.", bump, current),
+			Solutions: []string{
+				"choose another bump level: major, minor, or patch",
+				fmt.Sprintf("delete the local tag: git tag -d %s", tag),
+				fmt.Sprintf("delete the remote tag: git push %s --delete %s", s.cfg.Remote, tag),
+			},
+		}
 	}
 
 	commits, err := s.commits(ctx, previousTag, "HEAD")
@@ -236,10 +296,7 @@ func (s *Service) Plan(ctx context.Context, bump semver.Bump, prerelease string)
 		return nil, err
 	}
 	if len(commits) == 0 && !s.cfg.AllowEmpty {
-		if previousTag == "" {
-			return nil, fmt.Errorf("%w: the repository has no commits to release", ErrNoChanges)
-		}
-		return nil, fmt.Errorf("%w: %s already points at HEAD", ErrNoChanges, previousTag)
+		return nil, noChangesError(previousTag)
 	}
 
 	head, err := s.git.HeadSHA(ctx)
@@ -255,9 +312,32 @@ func (s *Service) Plan(ctx context.Context, bump semver.Bump, prerelease string)
 		Next:        next,
 		PreviousTag: previousTag,
 		Tag:         tag,
+		Date:        time.Now().UTC(),
 		Commits:     commits,
 		Repo:        s.repository(ctx),
 	}, nil
+}
+
+// noChangesError explains an empty release, which means something different
+// depending on whether the repository has ever been tagged.
+func noChangesError(previousTag string) error {
+	if previousTag == "" {
+		return &Error{
+			Cause:     ErrNoChanges,
+			What:      "There are no commits to release.",
+			Why:       "The repository has no history yet.",
+			Solutions: []string{"commit something first"},
+		}
+	}
+	return &Error{
+		Cause: ErrNoChanges,
+		What:  fmt.Sprintf("No releasable commits since %s.", previousTag),
+		Why:   fmt.Sprintf("%s already points at HEAD, so this release would be empty.", previousTag),
+		Solutions: []string{
+			"commit the work you intend to release",
+			"release the existing commit anyway: --allow-empty",
+		},
+	}
 }
 
 // Apply creates the annotated tag described by the plan and, when push is set,
@@ -272,8 +352,18 @@ func (s *Service) Apply(ctx context.Context, p *Plan, push bool) error {
 		return nil
 	}
 	if err := s.git.PushTag(ctx, s.cfg.Remote, p.Tag); err != nil {
-		return fmt.Errorf("pushing tag %s to %s: %w\nthe tag exists locally; delete it with `git tag -d %s` before retrying",
-			p.Tag, s.cfg.Remote, err, p.Tag)
+		// The tag was created before the push was attempted, so it is still
+		// sitting in the local repository. Say so, and say how to remove it.
+		return &Error{
+			Cause: err,
+			What:  fmt.Sprintf("Pushing %s to %s failed.", p.Tag, s.cfg.Remote),
+			Why:   fmt.Sprintf("The tag was created locally and still exists.\n\n  %s", err),
+			Solutions: []string{
+				fmt.Sprintf("remove the local tag before retrying: git tag -d %s", p.Tag),
+				fmt.Sprintf("check that you can push to %s", s.cfg.Remote),
+				fmt.Sprintf("push it by hand: git push %s %s", s.cfg.Remote, p.Tag),
+			},
+		}
 	}
 	return nil
 }
@@ -281,8 +371,15 @@ func (s *Service) Apply(ctx context.Context, p *Plan, push bool) error {
 // tagMessage is the annotation stored in the tag object: a subject line and the
 // release notes, so `git show <tag>` explains the release without a network
 // round trip.
+//
+// The built-in template is used deliberately: the tag is Git metadata, and it
+// should not change shape because a project overrode its release-notes layout.
 func (s *Service) tagMessage(p *Plan) string {
-	notes := changelog.RenderNotes(p.Release(time.Now().UTC()), changelog.DefaultSections())
+	notes, err := changelog.RenderNotes(p.Release(), changelog.Options{})
+	if err != nil {
+		// A tag annotation is not worth failing a release over.
+		return "Release " + p.Tag
+	}
 	return fmt.Sprintf("Release %s\n\n%s", p.Tag, notes)
 }
 
@@ -290,7 +387,7 @@ func (s *Service) tagMessage(p *Plan) string {
 // and the commits between them. It is what the post-tag automation uses to
 // render notes for a tag that has already been pushed.
 func (s *Service) Snapshot(ctx context.Context, tag string) (changelog.Release, error) {
-	if err := s.git.EnsureRepository(ctx); err != nil {
+	if err := s.ensureRepository(ctx); err != nil {
 		return changelog.Release{}, err
 	}
 
@@ -299,7 +396,16 @@ func (s *Service) Snapshot(ctx context.Context, tag string) (changelog.Release, 
 		return changelog.Release{}, err
 	}
 	if !exists {
-		return changelog.Release{}, fmt.Errorf("%w: %s", ErrNoSuchTag, tag)
+		return changelog.Release{}, &Error{
+			Cause: ErrNoSuchTag,
+			What:  fmt.Sprintf("Tag %q does not exist.", tag),
+			Why:   "Release notes are rendered from an existing tag and the commits behind it.",
+			Solutions: []string{
+				"list the tags: git tag -l",
+				"fetch tags created elsewhere: git fetch --tags",
+				"check the spelling, including the leading \"v\"",
+			},
+		}
 	}
 
 	version, err := semver.Parse(strings.TrimPrefix(tag, s.cfg.TagPrefix))
@@ -312,9 +418,14 @@ func (s *Service) Snapshot(ctx context.Context, tag string) (changelog.Release, 
 		return changelog.Release{}, err
 	}
 
-	previousTag := ""
+	// An existing tag can describe its own bump by comparing itself with the
+	// tag before it, which is what lets `publish` report statistics.
+	previousTag, bump := "", ""
 	if prev, ok := tags.predecessorOf(version); ok {
 		previousTag = prev.tag
+		if b, ok := semver.BumpBetween(prev.version, version); ok {
+			bump = b.String()
+		}
 	}
 
 	commits, err := s.commits(ctx, previousTag, tag)
@@ -335,13 +446,14 @@ func (s *Service) Snapshot(ctx context.Context, tag string) (changelog.Release, 
 		Date:        date.UTC(),
 		Repo:        s.repository(ctx),
 		Commits:     commits,
+		Bump:        bump,
 	}, nil
 }
 
 // LatestTag returns the highest-precedence release tag, or "" when there is
 // none.
 func (s *Service) LatestTag(ctx context.Context) (string, error) {
-	if err := s.git.EnsureRepository(ctx); err != nil {
+	if err := s.ensureRepository(ctx); err != nil {
 		return "", err
 	}
 	tags, err := s.taggedVersions(ctx)

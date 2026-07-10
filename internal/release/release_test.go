@@ -378,8 +378,14 @@ func TestApplyCreatesAndPushesTag(t *testing.T) {
 	if !strings.HasPrefix(fake.tagMessage, "Release v1.3.0\n\n") {
 		t.Errorf("tag message = %q, want a Release subject line", fake.tagMessage)
 	}
-	if !strings.Contains(fake.tagMessage, "add a thing") {
+	// The notes are embedded, with subjects formatted for reading.
+	if !strings.Contains(fake.tagMessage, "Add a thing") {
 		t.Errorf("tag message should embed the notes:\n%s", fake.tagMessage)
+	}
+	// Markdown headings must survive: git strips '#' lines unless the tag is
+	// created with --cleanup=verbatim.
+	if !strings.Contains(fake.tagMessage, "### 🚀 Features") {
+		t.Errorf("tag message should keep its headings:\n%s", fake.tagMessage)
 	}
 }
 

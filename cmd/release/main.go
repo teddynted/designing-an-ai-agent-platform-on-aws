@@ -59,16 +59,27 @@ func main() {
 		// The flag package has already printed the usage text.
 		os.Exit(exitUsage)
 	case errors.Is(err, errAborted):
-		fmt.Fprintln(os.Stderr, "aborted")
+		p := newPrinter(os.Stdout, os.Stderr, useColor(false, os.Stderr))
+		p.warn("Aborted, nothing was changed")
 		os.Exit(exitAborted)
 	case errors.Is(err, errUsage):
 		fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
 		usage(os.Stderr)
 		os.Exit(exitUsage)
 	default:
-		fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
+		reportError(err)
 		os.Exit(exitFailure)
 	}
+}
+
+// reportError prints a failure. A release.Error already carries its own
+// explanation and remedies, and formats itself across several lines; anything
+// else is a one-liner. Both get the same leading glyph.
+func reportError(err error) {
+	p := newPrinter(os.Stdout, os.Stderr, useColor(false, os.Stderr))
+	p.blank()
+	p.fail("%s", err)
+	p.blank()
 }
 
 // errUsage marks an error the user can fix by reading the usage text.

@@ -51,22 +51,39 @@ so --pre beta after --pre rc yields 1.3.0-beta.0.
 
 ### Types
 
-| Type | Changelog section | Shown in release notes |
-| --- | --- | --- |
-| `feat` | Features | yes |
-| `fix` | Bug Fixes | yes |
-| `perf` | Performance Improvements | yes |
-| `revert` | Reverts | yes |
-| `docs` | Documentation | yes |
-| `refactor` | Code Refactoring | yes |
-| `build` | Build System | no |
-| `ci` | Continuous Integration | no |
-| `test` | Tests | no |
-| `style` | Styles | no |
-| `chore` | Chores | no |
+Every type has a home in the release notes, so nothing you write disappears.
 
-A subject that does not match the grammar is not lost. It is filed under
-**Other Changes**, so nothing silently disappears from a release.
+| Type | Section | Use it for |
+| --- | --- | --- |
+| `feat` | 🚀 Features | New, backwards-compatible functionality |
+| `fix` | 🐛 Bug Fixes | A defect corrected |
+| `perf` | ⚡ Performance | Faster or leaner, same behaviour |
+| `refactor` | ♻️ Refactoring | Restructuring with no behaviour change |
+| `docs` | 📚 Documentation | Prose, comments, examples |
+| `revert` | ⏪ Reverts | Undoing an earlier commit |
+| `test` | 🧪 Tests | Tests only |
+| `build` | 📦 Build System | The Makefile, cross-compilation, `go.mod` |
+| `ci` | 🔧 Continuous Integration | Workflows |
+| `style` | 🎨 Styles | Formatting, no semantic change |
+| `chore` | 🧹 Chores | Housekeeping that fits nowhere else |
+
+A subject that does not match the grammar is not lost either: it is filed under
+**Other Changes**.
+
+The section, its heading, and its icon all come from `DefaultCategories()` in
+`internal/changelog`. Adding a type is one struct literal in that list —
+grouping, statistics, and rendering pick it up automatically.
+
+### Writing the description
+
+The tooling capitalises the first letter, drops a trailing full stop, and strips
+the `type(scope):` prefix, so write the description as you would speak it. Keep
+it short, in the imperative mood, and describe the change rather than the file:
+
+```text
+good:  feat(semver): support pre-release series switching
+poor:  feat(semver): changed bump.go to add a new function
+```
 
 ### Breaking changes
 
@@ -102,18 +119,29 @@ Follow the standards the code already sets:
 ### Tests
 
 Every package has tests, and they run in milliseconds because nothing touches
-the network or the filesystem:
+the network, and only the template loader touches the filesystem:
 
 - `internal/semver` is table-driven, and walks the precedence chain from the
   specification verbatim.
 - `internal/git` drives a stub `Runner` instead of the `git` binary.
+- `internal/changelog` renders fixtures and asserts on the Markdown.
 - `internal/release` drives an in-memory `Git` implementation, so the whole
   validate-plan-apply flow is covered without a repository.
 - `internal/github` runs against `httptest`.
+- `cmd/release` captures a `printer` writing to buffers, so output and
+  alignment are testable without a terminal.
 
 Add tests for behaviour, not for coverage. A test that pins *why* a line exists
-— `TestCreateTagKeepsMarkdownHeadings`, `TestBumpAlwaysIncreasesPrecedence` —
-is worth more than one that restates the implementation.
+is worth more than one that restates the implementation:
+
+- `TestCreateTagKeepsMarkdownHeadings` — `git tag` needs `--cleanup=verbatim`,
+  or Markdown headings vanish from the tag message.
+- `TestBumpAlwaysIncreasesPrecedence` — a bumped version must never sort below
+  the version it came from.
+- `TestStatisticsMatchesGroups` — the statistics and the rendered sections are
+  derived from the same classification, so they cannot disagree.
+- `TestTableIgnoresValueLength` — a long repository name must not shift the
+  columns of the release plan.
 
 ## Pull requests
 
