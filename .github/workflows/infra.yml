@@ -1,0 +1,119 @@
+name: Infrastructure
+
+# Validates the CloudFormation templates on every change, and offers a manual,
+# environment-gated path to deploy them. Validation needs no AWS credentials;
+# deployment assumes a role over OIDC and never uses long-lived secrets.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra.yml"
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment to deploy
+        type: choice
+        options: [dev, staging, prod]
+        default: dev
+      confirm:
+        description: 'Type "deploy" to confirm a real deployment'
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-${{ github.ref }}-${{ github.event.inputs.environment || 'validate' }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Validation — runs on every PR and push. No credentials required.
+  # ---------------------------------------------------------------------------
+  validate:
+    name: Validate templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cfn-lint
+        run: pip install --disable-pip-version-check cfn-lint
+
+      - name: Lint CloudFormation templates
+        run: cfn-lint infra/cloudformation/*.yaml
+
+      # cfn-lint checks each template in isolation, so it cannot see that one
+      # stack imports a value another stack forgot to export. This does.
+      - name: Check cross-stack imports resolve
+        shell: python
+        run: |
+          import glob, re, sys
+
+          exports, imports = set(), {}
+          for path in sorted(glob.glob("infra/cloudformation/*.yaml")):
+              text = open(path).read()
+              for m in re.finditer(r'Export:\s*\n\s*Name:\s*!Sub\s*"([^"]+)"', text):
+                  exports.add(m.group(1))
+              for m in re.finditer(r'Fn::ImportValue:\s*!Sub\s*"([^"]+)"', text):
+                  imports.setdefault(m.group(1), path)
+
+          missing = {name: src for name, src in imports.items() if name not in exports}
+          if missing:
+              for name, src in missing.items():
+                  print(f"::error file={src}::import '{name}' has no matching export")
+              sys.exit(1)
+          print(f"{len(imports)} cross-stack imports all resolve against {len(exports)} exports")
+
+  # ---------------------------------------------------------------------------
+  # Deployment — manual only, gated behind an environment and an explicit
+  # confirmation. Assumes an IAM role over OIDC; no static credentials.
+  #
+  # Requires one-time setup in the AWS account and this repository:
+  #   * an IAM OIDC identity provider for token.actions.githubusercontent.com
+  #   * a deploy role trusting this repo, its ARN in the repository or
+  #     environment variable AWS_DEPLOY_ROLE_ARN
+  #   * the target region in the variable AWS_REGION
+  #   * GitHub environments named dev / staging / prod (add required reviewers
+  #     to prod for a manual approval gate)
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy (${{ github.event.inputs.environment }})
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.confirm == 'deploy'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    permissions:
+      id-token: write   # required to request the OIDC token
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy all stacks
+        run: >-
+          make -C infra deploy
+          ENV=${{ github.event.inputs.environment }}
+          REGION=${{ vars.AWS_REGION }}
+
+      - name: Show stack outputs
+        run: >-
+          make -C infra outputs
+          ENV=${{ github.event.inputs.environment }}
+          REGION=${{ vars.AWS_REGION }}
