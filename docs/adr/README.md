@@ -18,6 +18,10 @@ Format: [Michael Nygard's](https://cognitect.com/blog/2011/11/15/documenting-arc
 | [0010](0010-agent-sandbox-containment.md) | Contain agents by removing privilege, not by filtering prompts | Accepted |
 | [0011](0011-account-per-environment.md) | One AWS account per environment | Accepted |
 | [0012](0012-scale-inference-to-zero.md) | Scale the self-hosted inference fleet to zero | Accepted |
+| [0013](0013-hand-written-github-rest-client.md) | Write a minimal GitHub REST client rather than depend on go-github | Accepted |
+| [0014](0014-exec-git-rather-than-go-git.md) | Delegate to the `git` binary rather than depend on go-git | Accepted |
+
+ADRs 0013 and 0014 concern repository tooling ([13 — Release Management](../architecture/13-release-management.md)) rather than the platform itself. They are recorded here because both were live choices with real trade-offs, and because "we evaluated the obvious library and did not use it" is exactly the reasoning that evaporates in eighteen months.
 
 ## Which decisions are load-bearing
 

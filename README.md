@@ -70,6 +70,14 @@ Two details are load-bearing and easy to miss:
 
 ## Documentation
 
+### Start here
+
+| Doc | Answers |
+|---|---|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to branch, commit, test, and open a Pull Request |
+| [RELEASE_MANAGEMENT.md](RELEASE_MANAGEMENT.md) | Semantic Versioning strategy, release lifecycle, who does what |
+| [CHANGELOG.md](CHANGELOG.md) | What has actually shipped |
+
 ### Architecture
 
 | Doc | Answers |
@@ -86,11 +94,12 @@ Two details are load-bearing and easy to miss:
 | [10 — Operations](docs/architecture/10-operations.md) | The agent run as the unit of observability |
 | [11 — Extensibility](docs/architecture/11-extensibility.md) | The four seams, and where the design resists change |
 | [12 — Risks](docs/architecture/12-risks-assumptions-constraints.md) | Assumptions, constraints, risk register |
+| [13 — Release Management](docs/architecture/13-release-management.md) | The Go release tooling: SemVer, changelog, tagging, publication |
 | [Diagrams](docs/architecture/diagrams/README.md) | AWS infrastructure diagram (SVG + official-icon PNG source) |
 
 ### Decisions
 
-Twelve [ADRs](docs/adr/) record what was chosen, what was rejected, and what it costs. If you read three, read [0002](docs/adr/0002-three-plane-decomposition.md), [0003](docs/adr/0003-model-gateway-seam.md), and [0010](docs/adr/0010-agent-sandbox-containment.md).
+Fourteen [ADRs](docs/adr/) record what was chosen, what was rejected, and what it costs. If you read three, read [0002](docs/adr/0002-three-plane-decomposition.md), [0003](docs/adr/0003-model-gateway-seam.md), and [0010](docs/adr/0010-agent-sandbox-containment.md).
 
 ### Blog
 
@@ -110,6 +119,27 @@ This milestone is written to become the technical article *Designing an AI Agent
 | Agent runtime | OpenClaw Gateway |
 | Inference | Amazon Bedrock (default, backstop) · Ollama on Spot GPU (bulk, private) |
 | Observability | CloudWatch (EMF), CloudTrail, GuardDuty |
+| Release tooling | Go (standard library; one dependency) — [13](docs/architecture/13-release-management.md) |
+
+## Releasing
+
+The project follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html). Releases are cut by a Go CLI and published by GitHub Actions when the tag lands.
+
+```bash
+make release-patch    # 0.1.0 -> 0.1.1   a backwards-compatible fix
+make release-minor    # 0.1.0 -> 0.2.0   a backwards-compatible feature
+make release-major    # 0.1.0 -> 1.0.0   a breaking change
+
+make release-dry-run  # show what a minor release would do, writing nothing
+make notes            # print the notes for the next release
+```
+
+You choose the level; that is the only human decision. The CLI bumps `VERSION`, generates the notes from the commit range since the previous tag, writes [`CHANGELOG.md`](CHANGELOG.md) and [`RELEASES.yaml`](RELEASES.yaml), commits them, and tags the result. GitHub Actions publishes the release. The `Makefile` is a convenience wrapper — the release logic lives in [`cmd/release`](cmd/release/) and [`internal/`](internal/), and nowhere else.
+
+**Your commit subjects become the changelog.** See [CONTRIBUTING.md](CONTRIBUTING.md#commit-messages).
+
+→ **[RELEASE_MANAGEMENT.md](RELEASE_MANAGEMENT.md)** is the definitive guide: versioning strategy, release lifecycle, responsibilities, and best practices.
+→ **[13 — Release Management](docs/architecture/13-release-management.md)** covers the architecture behind it.
 
 ## Three things this design admits
 
