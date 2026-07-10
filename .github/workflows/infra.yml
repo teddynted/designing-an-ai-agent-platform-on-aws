@@ -116,8 +116,16 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # PURCHASE defaults to spot. Set the repository variable
+      # AWS_PURCHASE_OPTION to "on-demand" to deploy without Spot — useful when
+      # the account's Spot quota is still zero — then remove it once a Spot
+      # quota increase is approved.
       - name: Deploy all stacks
-        run: make -C infra deploy ENV="$TARGET_ENV" REGION="${{ vars.AWS_REGION }}"
+        run: >-
+          make -C infra deploy
+          ENV="$TARGET_ENV"
+          REGION="${{ vars.AWS_REGION }}"
+          PURCHASE="${{ vars.AWS_PURCHASE_OPTION || 'spot' }}"
 
       - name: Show stack outputs
         run: make -C infra outputs ENV="$TARGET_ENV" REGION="${{ vars.AWS_REGION }}"
