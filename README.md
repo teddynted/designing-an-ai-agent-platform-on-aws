@@ -187,7 +187,8 @@ trade-offs, the data and event flows, and the security, cost, observability, and
 scalability models — is documented in the Milestone 1 deliverables:
 
 - 📄 **[Designing an AI Agent Platform on AWS](docs/blog/designing-an-ai-agent-platform-on-aws.md)** — the architecture blog post
-- 📐 **[Architecture diagrams](docs/architecture/diagrams.md)** — high-level, event flow, component interaction, and deployment boundaries
+- 🗺️ **[AWS architecture diagram](docs/architecture/aws-architecture.svg)** — the AWS service view (Cloud / Region / VPC / subnets)
+- 📐 **[Architecture diagrams](docs/architecture/diagrams.md)** — the service view plus four Mermaid flow views (high-level, event flow, component interaction, deployment boundaries)
 
 These are design documents. **No infrastructure is deployed**; Milestone 1 is
 architecture only.

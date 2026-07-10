@@ -5,15 +5,45 @@
 > They are the visual companion to
 > [Designing an AI Agent Platform on AWS](../blog/designing-an-ai-agent-platform-on-aws.md).
 
-Four diagrams, one platform, one vocabulary. They are drawn with
-[GitHub-native Mermaid](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams)
-rather than embedded AWS icon images, so that they are version-controlled,
-diffable in review, and render inline on GitHub without external assets. A pass
-using the official [AWS Architecture Icons](https://aws.amazon.com/architecture/icons/)
-as image exports can follow in a later documentation milestone; the intent is
-that the *shape* of the architecture is settled here first.
+One platform, one vocabulary, two complementary views:
+
+- an **AWS service view** ([below](#aws-architecture-diagram)) — a hand-authored
+  SVG in the AWS Architecture Center style, with nested Cloud / Region / VPC /
+  subnet boundaries and category-coloured service tiles;
+- four **flow views** (Diagrams 1–4) drawn in
+  [GitHub-native Mermaid](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams)
+  — high-level, event flow, component interaction, and deployment boundaries.
+
+Both are plain text (SVG and Mermaid), so they are version-controlled, diffable
+in review, and render inline on GitHub without external binary assets. The SVG
+uses AWS category *colours* and layout conventions rather than the trademarked
+[AWS Architecture Icons](https://aws.amazon.com/architecture/icons/) themselves;
+a pass exporting the official icons can follow if these documents are prepared
+for external publication.
+
+## AWS Architecture Diagram
+
+The service view: how the platform maps onto AWS, arranged by trust boundary.
+The developer and GitHub sit outside the account; everything inside the **AWS
+Cloud → Region → VPC** nesting is the platform. The private subnet accepts no
+inbound connection from the internet — the boundary that contains an agent with
+a shell.
+
+Its tiles are coloured by **AWS service category** (compute, storage, security,
+and so on — see the legend inside the diagram), the convention AWS's own
+diagrams use. That is a richer key than the AWS-versus-self-hosted split the
+Mermaid flow views use below; each diagram carries the legend it needs.
+
+![AWS architecture diagram: a GitHub webhook enters EventBridge, Lambda dispatches to OpenClaw on EC2 Spot in a private subnet, which calls Ollama for inference with Amazon Bedrock as a fallback, writes artifacts to S3, and orchestrates publication back to GitHub through n8n; CloudWatch collects telemetry and IAM scopes permissions.](aws-architecture.svg)
+
+> Rendering note: GitHub displays this SVG inline. It was validated as
+> well-formed XML and visually proofed by rasterising it during authoring.
+
+---
 
 ## Conventions
+
+The four Mermaid flow views below share one key.
 
 Every diagram uses the same four categories and the same colours, so a reader
 who learns the key once can read all four.
