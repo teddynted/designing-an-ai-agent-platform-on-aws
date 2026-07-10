@@ -66,42 +66,10 @@ func Entry(notes release.Notes) string {
 	return b.String()
 }
 
-// ReleaseBody renders notes as a GitHub release body: a summary paragraph, the
-// sections, and a compare link back to the previous release.
-func ReleaseBody(notes release.Notes, repository string) string {
-	var b strings.Builder
-
-	if notes.Summary != "" {
-		b.WriteString(notes.Summary)
-		b.WriteString("\n")
-	}
-
-	for _, section := range notes.PopulatedSections() {
-		fmt.Fprintf(&b, "\n### %s\n\n", section.Category)
-		for _, entry := range section.Entries {
-			fmt.Fprintf(&b, "- %s\n", entry)
-		}
-	}
-
-	if notes.IsEmpty() {
-		b.WriteString("\nNo user-facing changes.\n")
-	}
-
-	if link := compareLink(notes, repository); link != "" {
-		fmt.Fprintf(&b, "\n%s\n", link)
-	}
-	return b.String()
-}
-
-// compareLink points at the diff this release represents. The first release has
-// no predecessor and therefore no compare link.
-func compareLink(notes release.Notes, repository string) string {
-	if repository == "" || notes.Comparison == nil || notes.Comparison.IsInitial() {
-		return ""
-	}
-	url := fmt.Sprintf("https://github.com/%s/compare/%s", repository, notes.Comparison.Range())
-	return fmt.Sprintf("**Full changelog:** [%s](%s)", notes.Comparison.Range(), url)
-}
+// The GitHub release body is rendered by internal/releasenotes, not here. The
+// two documents diverged: a changelog entry is a terse ledger line, and a
+// release body is an announcement with highlights, contributors, and statistics.
+// Keeping one renderer for both would have made each worse.
 
 // Render builds a whole changelog from newest to oldest.
 func Render(entries []release.Notes) string {

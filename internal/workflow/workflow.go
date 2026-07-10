@@ -20,6 +20,7 @@ import (
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/changelog"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/git"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/release"
+	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/releasenotes"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/roadmap"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/version"
 )
@@ -107,11 +108,17 @@ type Result struct {
 }
 
 // Runner executes releases.
+//
+// Two note generators, because the two documents differ. `notes` produces the
+// Keep a Changelog entry that lands in CHANGELOG.md, inside the tag. `body`
+// produces the announcement published to the forge: grouped by what a reader
+// cares about, with pull request titles rather than commit subjects.
 type Runner struct {
 	repo        Repository
 	comparisons *release.ComparisonService
 	notes       *release.NotesService
-	publisher   Publisher // may be nil, meaning "never publish"
+	body        *releasenotes.Builder // may be nil, meaning "no release body"
+	publisher   Publisher             // may be nil, meaning "never publish"
 	clock       release.Clock
 	logger      *slog.Logger
 }
@@ -122,6 +129,7 @@ func NewRunner(
 	repo Repository,
 	comparisons *release.ComparisonService,
 	notes *release.NotesService,
+	body *releasenotes.Builder,
 	publisher Publisher,
 	clock release.Clock,
 	logger *slog.Logger,
@@ -132,7 +140,84 @@ func NewRunner(
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Runner{repo: repo, comparisons: comparisons, notes: notes, publisher: publisher, clock: clock, logger: logger}
+	return &Runner{
+		repo:        repo,
+		comparisons: comparisons,
+		notes:       notes,
+		body:        body,
+		publisher:   publisher,
+		clock:       clock,
+		logger:      logger,
+	}
+}
+
+// releaseBody renders the announcement published to the forge.
+//
+// The changelog notes are passed in rather than recomputed: they already carry
+// the comparison, and asking the forge for it twice would be a request spent to
+// arrive at the same answer.
+func (r *Runner) releaseBody(target version.Version, notes release.Notes, options Options, head string) (string, error) {
+	if r.body == nil {
+		return "", nil
+	}
+
+	previous, err := r.comparisons.PreviousRelease(&target)
+	if err != nil {
+		return "", err
+	}
+	previousTag := ""
+	if previous != nil {
+		previousTag = previous.Name
+	}
+
+	comparison := git.Comparison{}
+	if notes.Comparison != nil {
+		comparison = *notes.Comparison
+	}
+
+	built, err := r.body.Build(releasenotes.Input{
+		Version:     target,
+		Date:        notes.Date,
+		Repository:  options.Repository,
+		PreviousTag: previousTag,
+		Head:        head,
+		Comparison:  comparison,
+		Roadmap:     r.roadmapEntry(options.Root, target),
+	})
+	if err != nil {
+		return "", err
+	}
+	return releasenotes.Render(built), nil
+}
+
+// Preview renders the release body for a version without writing anything.
+//
+// What `release notes` prints, and what a dry run reports: the announcement
+// exactly as it would be published.
+func (r *Runner) Preview(target version.Version, options Options, head string) (string, error) {
+	if head == "" {
+		head = "HEAD"
+	}
+	notes, err := r.notes.Generate(target, head)
+	if err != nil {
+		return "", err
+	}
+	return r.releaseBody(target, notes, options, head)
+}
+
+// roadmapEntry finds this version in RELEASES.yaml, where a human wrote its
+// summary and highlights. Nil when there is no roadmap, or no entry in it.
+func (r *Runner) roadmapEntry(root string, target version.Version) *release.Release {
+	file := roadmap.NewFile(root)
+	if !file.Exists() {
+		return nil
+	}
+	registry, err := file.Load()
+	if err != nil {
+		r.logger.Warn("could not read the roadmap; release highlights will be generated", "error", err)
+		return nil
+	}
+	return registry.Find(target)
 }
 
 // Run performs a release.
@@ -194,7 +279,10 @@ func (r *Runner) Run(options Options) (Result, error) {
 		return result, err
 	}
 	result.Notes = notes
-	result.Body = changelog.ReleaseBody(notes, options.Repository)
+
+	if result.Body, err = r.releaseBody(next, notes, options, "HEAD"); err != nil {
+		return result, err
+	}
 
 	if notes.IsEmpty() {
 		r.logger.Warn("this release carries no user-facing changes", "version", next.Tag())
@@ -321,7 +409,10 @@ func (r *Runner) Publish(target version.Version, options Options) (Result, error
 		return result, err
 	}
 	result.Notes = notes
-	result.Body = changelog.ReleaseBody(notes, options.Repository)
+
+	if result.Body, err = r.releaseBody(target, notes, options, target.Tag()); err != nil {
+		return result, err
+	}
 
 	// A dry run renders the body and stops, so it needs no credentials.
 	if options.DryRun {

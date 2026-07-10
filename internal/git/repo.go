@@ -24,7 +24,7 @@ const (
 	recordSep = "\x1e"
 )
 
-var logFormat = strings.Join([]string{"%H", "%s", "%b", "%an", "%aI"}, unitSep) + recordSep
+var logFormat = strings.Join([]string{"%H", "%s", "%b", "%an", "%aI", "%P"}, unitSep) + recordSep
 
 // statusToKind maps the letter git prints in --name-status output.
 var statusToKind = map[byte]ChangeKind{
@@ -325,7 +325,7 @@ func parseLog(out string) ([]Commit, error) {
 			continue
 		}
 		fields := strings.Split(record, unitSep)
-		if len(fields) < 5 {
+		if len(fields) < 6 {
 			return nil, fmt.Errorf("unparseable git log record: %q", record)
 		}
 		commits = append(commits, Commit{
@@ -334,9 +334,49 @@ func parseLog(out string) ([]Commit, error) {
 			Body:    strings.TrimSpace(fields[2]),
 			Author:  strings.TrimSpace(fields[3]),
 			Date:    parseTime(fields[4]),
+			Parents: strings.Fields(fields[5]),
 		})
 	}
 	return commits, nil
+}
+
+// RevList returns the SHAs reachable from head but not base, newest first.
+//
+// Used to discover which commits a merged pull request brought in, so that the
+// pull request appears in the release notes and its individual commits do not.
+func (r *Repo) RevList(base, head string) ([]string, error) {
+	revision := head
+	if base != "" {
+		revision = base + ".." + head
+	}
+	out, err := r.runner.Run("rev-list", revision)
+	if err != nil {
+		return nil, err
+	}
+	var shas []string
+	for _, line := range strings.Split(out, "\n") {
+		if sha := strings.TrimSpace(line); sha != "" {
+			shas = append(shas, sha)
+		}
+	}
+	return shas, nil
+}
+
+// FilesChanged lists the paths touched between two refs, sorted.
+//
+// An empty base compares against the empty tree, which is what the root commit
+// needs: it has no parent to diff against.
+func (r *Repo) FilesChanged(base, head string) ([]string, error) {
+	if base == "" {
+		base = EmptyTree
+	}
+	out, err := r.runner.Run("diff", "--name-only", "-M", "-z", base, head)
+	if err != nil {
+		return nil, err
+	}
+	paths := splitNUL(out)
+	slices.Sort(paths)
+	return slices.Compact(paths), nil
 }
 
 // nameStatusEntry is the kind and origin of one path, before line counts join it.

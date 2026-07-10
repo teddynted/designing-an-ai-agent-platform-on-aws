@@ -84,47 +84,6 @@ func TestEntryOnAnEmptyRelease(t *testing.T) {
 	}
 }
 
-func TestReleaseBodyHasSummaryAndCompareLink(t *testing.T) {
-	got := changelog.ReleaseBody(
-		notes("0.2.0", map[release.Category][]string{release.Added: {"Add a thing"}}),
-		"teddynted/platform",
-	)
-
-	if !strings.HasPrefix(got, "2 commits across 1 file") {
-		t.Errorf("the release body leads with the summary:\n%s", got)
-	}
-	if strings.Contains(got, "## [0.2.0]") {
-		t.Errorf("the release body does not repeat the version heading:\n%s", got)
-	}
-	want := "**Full changelog:** [v0.1.0...v0.2.0](https://github.com/teddynted/platform/compare/v0.1.0...v0.2.0)"
-	if !strings.Contains(got, want) {
-		t.Errorf("release body should end with a compare link:\n%s", got)
-	}
-}
-
-// The first release has no predecessor to compare against.
-func TestReleaseBodyOmitsCompareLinkForTheFirstRelease(t *testing.T) {
-	head := version.MustParse("0.1.0")
-	initial := release.Notes{
-		Version:    head,
-		Date:       release.MustDate("2026-07-10"),
-		Summary:    "Initial release. 1 commit across 2 files.",
-		Sections:   map[release.Category][]string{release.Added: {"Everything"}},
-		Comparison: &git.Comparison{Head: head},
-	}
-	got := changelog.ReleaseBody(initial, "teddynted/platform")
-	if strings.Contains(got, "Full changelog") {
-		t.Errorf("the first release has nothing to compare against:\n%s", got)
-	}
-}
-
-func TestReleaseBodyWithoutARepositoryOmitsTheLink(t *testing.T) {
-	got := changelog.ReleaseBody(notes("0.2.0", map[release.Category][]string{release.Added: {"x"}}), "")
-	if strings.Contains(got, "Full changelog") {
-		t.Errorf("no repository means no link:\n%s", got)
-	}
-}
-
 func TestContains(t *testing.T) {
 	doc := changelog.Render([]release.Notes{
 		notes("0.2.0", map[release.Category][]string{release.Added: {"a"}}),

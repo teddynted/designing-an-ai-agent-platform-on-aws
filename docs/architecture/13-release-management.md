@@ -20,9 +20,17 @@ internal/
     github/             REST client (Transport seam) + Releases adapter
     release/            Release aggregate, Notes, commit classifier, ports, Clock
     changelog/          Keep a Changelog rendering; CHANGELOG.md upsert
+    releasenotes/       The GitHub Release body: sections, contributors, stats
     roadmap/            RELEASES.yaml registry
     workflow/           Orchestration: bump -> notes -> changelog -> tag -> publish
 ```
+
+**`changelog` and `releasenotes` render different documents from the same range.**
+`CHANGELOG.md` is a ledger — terse, chronological, grouped by Keep a Changelog's
+six categories, and committed *inside* the tag. A GitHub Release is an
+announcement: it leads with highlights, groups by what a reader cares about,
+credits contributors, and folds the commit hashes away. One renderer for both
+would have made each worse.
 
 There is no `pkg/`. Nothing here is intended for reuse outside this repository, and `internal/` says so to the compiler rather than to a reader.
 
@@ -100,6 +108,30 @@ The heuristic is honest about its limits:
 - Merge commits and housekeeping (`chore`, `ci`, `build`, `test`, `style`, `Bump version`) are dropped. They are true statements about the repository that no reader of a release note wants.
 
 **Nothing here infers intent from the diff, and nothing calls a language model.** A wrong guess in a changelog is worse than a vague one, because a changelog is read as a record.
+
+### Sections, for the release body
+
+The release body groups by a second taxonomy — Breaking Changes, Security, New Features, Improvements, Bug Fixes, Documentation, Internal — chosen because they are the divisions a reader of a *release* cares about, not the divisions a changelog needs. `internal/releasenotes` picks one, from the most reliable signal available:
+
+| | Signal | Why it ranks there |
+|---|---|---|
+| 1 | A breaking-change marker | Explicit, and it can ruin somebody's afternoon |
+| 2 | A pull request label | Somebody chose it, from a list the project curates |
+| 3 | A Conventional Commit type | Somebody typed it, in a defined vocabulary |
+| 4 | The files touched | Not intent, but evidence: a change confined to `docs/` is documentation whatever its verb claims |
+| 5 | The leading imperative verb | The changelog classifier, reused so the two documents cannot disagree |
+
+Unrecognised changes land in **Improvements**, the section that asserts least.
+
+Labels are the only signal that needs the network, and their absence is not a failure: without `GITHUB_TOKEN` the chain simply starts at step 3. **Security is its own section** rather than a line in Bug Fixes, for the reason above: a security fix filed under "fixed" is a security fix nobody notices.
+
+### Pull requests, without the API
+
+A merged pull request leaves a commit that carries both its number and its human-written title — in the subject for a squash merge, in the body for a merge commit. `releasenotes` reads them from git, so titles work with no token at all.
+
+Two consequences worth knowing. The commits a pull request brought in are **absorbed**: `git rev-list p1..p2` on the merge names them, and they are represented by the pull request rather than listed beneath it. A *plain* merge — a local `Merge branch` — is dropped instead, because it has no title worth showing; its commits are not absorbed, so nothing is lost.
+
+Classification reads the pull request's title, never the merge commit's subject. `Merge pull request #6 from teddynted/release-management` says nothing about what changed.
 
 ## 13.5 The order of operations
 
