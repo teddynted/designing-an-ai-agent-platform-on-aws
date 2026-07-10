@@ -172,6 +172,7 @@ are tuned for a low-cost development environment.
 | `VpcCidr` | `10.20.0.0/16` | network | Room for future subnets. |
 | `PublicSubnetCidr` | `10.20.1.0/24` | network | The foundation's single subnet. |
 | `InstanceType` | `t3.large` | compute | GPU types are chosen when Ollama arrives. |
+| `PurchaseOption` | `spot` | compute | `spot` or `on-demand`. Use `on-demand` if the account's Spot quota is zero. |
 | `RootVolumeSize` | `30` | compute | GiB. OS and runtime temp only. |
 | `SshKeyName` | *(empty)* | compute | Empty disables SSH; use SSM Session Manager. |
 | `LogRetentionDays` | `14` | events, observability | Raise for staging/prod. |
@@ -215,14 +216,40 @@ managed services in the foundation.
 
 Full reasoning: the blog's [Security](../docs/blog/provisioning-an-ai-agent-platform-with-cloudformation.md#security) section.
 
+## Troubleshooting
+
+**`Max spot instance count exceeded` on the compute stack.** The account's Spot
+quota is zero or too low — common on new accounts. Two fixes:
+
+- *Proper fix (keep Spot):* request a Spot quota increase, then redeploy. The
+  quota is measured in vCPUs; a `t3.large` needs 2.
+
+  ```bash
+  aws service-quotas request-service-quota-increase \
+    --service-code ec2 --quota-code L-34B43A08 \
+    --desired-value 8 --region us-east-1
+  ```
+
+- *Immediate workaround (On-Demand):* deploy without Spot. Locally,
+  `make deploy PURCHASE=on-demand`; in CI, set the repository variable
+  `AWS_PURCHASE_OPTION` to `on-demand`. Switch back to Spot once the quota
+  increase is approved.
+
+**A stack is `ROLLBACK_COMPLETE` / `CREATE_FAILED`.** CloudFormation rolls a
+failed stack back but leaves earlier stacks up. Fix the cause and re-run
+`make deploy` (it is idempotent), or `make delete` to tear everything down (the
+artifact bucket is retained).
+
 ## Validation & limitations
 
 - **Validated** with `cfn-lint` (all six templates pass with no errors or
   warnings), and cross-stack imports were checked against their exports.
-- **Not deployed.** These templates were authored and validated without a live
-  AWS account, so an end-to-end `create-stack` was not performed. Before relying
-  on them, run `make validate` (server-side validation) and deploy to a
-  throwaway environment first.
+- **Deployment is being shaken out on a live account.** The stacks have been
+  applied via CI; the first real run surfaced an account-level Spot quota (see
+  [Troubleshooting](#troubleshooting)), which the `PurchaseOption` parameter now
+  works around. Treat the templates as validated and in early real-world use,
+  not yet battle-tested — deploy to a throwaway environment before relying on
+  them.
 - **Assumptions.** The artifact bucket name embeds the account ID and region to
   stay globally unique; the IAM stack assumes the naming convention in
   [02-iam.yaml](cloudformation/02-iam.yaml) matches the resources it grants

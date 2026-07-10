@@ -43,6 +43,20 @@ Parameters:
       Amazon Linux 2023 AMI, resolved from the AWS-managed SSM public parameter
       so no AMI ID is hard-coded and the latest patched image is always used.
 
+  PurchaseOption:
+    Type: String
+    Default: spot
+    AllowedValues: [spot, on-demand]
+    Description: >-
+      How the instance is purchased. Spot is the cost-optimised default. Use
+      on-demand if the account's Spot quota is zero — common on new accounts —
+      which fails with "Max spot instance count exceeded"; switch back to spot
+      once a Spot quota increase is approved.
+
+Conditions:
+  # Request Spot only when asked. On-demand omits InstanceMarketOptions entirely.
+  UseSpot: !Equals [!Ref PurchaseOption, spot]
+
 Resources:
   # A launch template carries everything about how the instance boots. The
   # CloudFormation AWS::EC2::Instance resource cannot request Spot directly, so
@@ -68,15 +82,18 @@ Resources:
           HttpTokens: required
           HttpEndpoint: enabled
           HttpPutResponseHopLimit: 1
-        # Purchase the instance on the Spot market. It is disposable: on
-        # interruption it terminates rather than stopping, and is recreated by
-        # re-deploying this stack. Auto-recovery via an Auto Scaling group is a
-        # later milestone, which will reuse this same launch template.
+        # Purchase on the Spot market by default: disposable, so on interruption
+        # it terminates rather than stops, and is recreated by re-deploying this
+        # stack (auto-recovery via an Auto Scaling group is a later milestone,
+        # which reuses this template). On-demand omits this block entirely.
         InstanceMarketOptions:
-          MarketType: spot
-          SpotOptions:
-            SpotInstanceType: one-time
-            InstanceInterruptionBehavior: terminate
+          !If
+            - UseSpot
+            - MarketType: spot
+              SpotOptions:
+                SpotInstanceType: one-time
+                InstanceInterruptionBehavior: terminate
+            - !Ref "AWS::NoValue"
         # The only volume is the root volume: encrypted, gp3, and deleted with
         # the instance. There is deliberately no secondary or persistent volume.
         BlockDeviceMappings:

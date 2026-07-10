@@ -9,11 +9,20 @@ ENV         ?= dev
 REGION      ?= us-east-1
 CFN_DIR     := cloudformation
 
+# spot (cheapest, the design default) or on-demand. Use on-demand if the
+# account's Spot quota is zero — new accounts fail with "Max spot instance
+# count exceeded" until a Spot quota increase is approved.
+PURCHASE    ?= spot
+
 # Named IAM roles require this capability acknowledgement.
 CAPS        := CAPABILITY_NAMED_IAM
-COMMON      := --region $(REGION) --capabilities $(CAPS) \
-               --parameter-overrides ProjectName=$(PROJECT) Environment=$(ENV) \
-               --tags Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=2
+PARAMS      := ProjectName=$(PROJECT) Environment=$(ENV)
+TAGS        := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=2
+
+# Per-stack extra parameter overrides. Only the compute stack declares
+# PurchaseOption, so it must be passed to that stack alone — passing it to a
+# stack that lacks it makes `aws cloudformation deploy` fail.
+EXTRA_03-compute := PurchaseOption=$(PURCHASE)
 
 # Stacks in dependency (deploy) order. Delete runs this list in reverse.
 STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observability
@@ -51,12 +60,15 @@ deploy: $(addprefix deploy-,$(STACKS)) ## Deploy all stacks in dependency order
 	@echo "deployment complete"
 
 # Deploy one stack. The stack name is prefixed so it is unambiguous in the
-# console, e.g. aiap-dev-01-network.
+# console, e.g. aiap-dev-01-network. $(EXTRA_$*) adds any stack-specific
+# parameter overrides (currently only compute's PurchaseOption).
 deploy-%: ## Deploy a single stack, e.g. make deploy-01-network
 	aws cloudformation deploy \
 		--stack-name $(PROJECT)-$(ENV)-$* \
 		--template-file $(CFN_DIR)/$*.yaml \
-		$(COMMON)
+		--region $(REGION) --capabilities $(CAPS) \
+		--parameter-overrides $(PARAMS) $(EXTRA_$*) \
+		--tags $(TAGS)
 
 delete: ## Delete all stacks in reverse order (retained buckets survive)
 	@for s in $$(echo $(STACKS) | tr ' ' '\n' | tail -r 2>/dev/null || echo $(STACKS) | tr ' ' '\n' | tac); do \
