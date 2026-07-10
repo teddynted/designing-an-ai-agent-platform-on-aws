@@ -1,0 +1,12 @@
+# Build output
+/dist/
+/bin/
+
+# Test and coverage artifacts
+*.out
+*.test
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
