@@ -1,0 +1,32 @@
+# The release roadmap.
+#
+# Versions and milestones are two sequences, not one. A tooling release delivers
+# no architectural milestone, so `milestone` is optional — conflating them would
+# force every milestone reference in docs/ to be renumbered whenever a tooling
+# release lands.
+#
+# `release patch|minor|major` marks the matching entry released and stamps its
+# date. A version cut without an entry here is added rather than rejected.
+
+releases:
+  - version: 0.1.0
+    title: Initial architecture
+    status: released
+    date: 2026-07-09
+    milestone: 1
+    summary: >-
+      Design and documentation only. No application implementation, no
+      CloudFormation templates, no workflows. Establishes the architectural
+      foundation that later milestones build on.
+    highlights:
+      - Three-plane decomposition of control, agent, and inference workloads
+      - Model Gateway seam with an OpenAI-compatible contract
+      - Agent containment by removing privilege rather than filtering prompts
+
+  - version: 0.2.0
+    title: Release management
+    status: planned
+    summary: >-
+      A Go release-management module: SemVer arithmetic, changelog generation
+      from commit history, annotated tagging, and GitHub release publication.
+      Repository tooling; it delivers no architectural milestone.
