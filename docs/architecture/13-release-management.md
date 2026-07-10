@@ -189,6 +189,8 @@ The CLI is dispatched by hand over the standard library's `flag` package. Cobra 
 
 `RELEASES.yaml` is the roadmap: planned, in-progress, and shipped releases in one hand-editable file. Git tags answer *what shipped*; they do not answer *what is next*, and a roadmap that lives only in prose drifts from the versions that implement it.
 
+It is also the only source of the Highlights prose in a GitHub Release. A version cut without a `summary` still publishes — leading with commit counts rather than a narrative, because a sentence of measurements is honest and an invented one is not. That fallback is never silent either: the builder warns, so the summary can be written before anyone reads the tag.
+
 ```yaml
 releases:
   - version: 0.1.0

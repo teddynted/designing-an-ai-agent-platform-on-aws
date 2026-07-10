@@ -247,7 +247,21 @@ func (b *Builder) Build(input Input) (Notes, error) {
 	}
 
 	notes.Summary, notes.Highlights = highlights(input, notes.Statistics)
+
+	// A release cut without a roadmap entry still publishes, leading with counts
+	// rather than prose. That is the honest fallback, not a good release note:
+	// say so, so the summary can be written before anyone reads the tag.
+	if !hasSummary(input.Roadmap) {
+		b.logger.Warn("no summary in RELEASES.yaml; the release will lead with commit counts rather than prose",
+			"version", input.Version.Tag())
+	}
+
 	return notes, nil
+}
+
+// hasSummary reports whether a human wrote a summary for this release.
+func hasSummary(roadmap *release.Release) bool {
+	return roadmap != nil && strings.TrimSpace(roadmap.Summary) != ""
 }
 
 // absorbedByPullRequests collects the SHAs a merged pull request brought in, so
@@ -357,13 +371,12 @@ func contributors(commits []git.Commit, comparison git.Comparison) []Contributor
 // narrative: a sentence of counts is honest, and an invented one is not.
 func highlights(input Input, stats Statistics) (summary string, bullets []string) {
 	if input.Roadmap != nil {
-		summary = strings.TrimSpace(input.Roadmap.Summary)
 		bullets = input.Roadmap.Highlights
 	}
-	if summary == "" {
-		summary = fallbackSummary(input, stats)
+	if !hasSummary(input.Roadmap) {
+		return fallbackSummary(input, stats), bullets
 	}
-	return summary, bullets
+	return strings.TrimSpace(input.Roadmap.Summary), bullets
 }
 
 func fallbackSummary(input Input, stats Statistics) string {

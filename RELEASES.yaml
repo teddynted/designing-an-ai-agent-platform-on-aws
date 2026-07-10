@@ -24,6 +24,11 @@ releases:
     date: "2026-07-10"
     summary: "A Go release-management module: SemVer arithmetic, changelog generation from commit history, annotated tagging, and GitHub release publication. Repository tooling; it delivers no architectural milestone."
   - version: 0.2.1
-    title: v0.2.1
+    title: Structured release notes
     status: released
     date: "2026-07-10"
+    summary: Release notes become an announcement rather than a transcript. Publishing a tag now produces a structured GitHub Release with highlights, categorised sections, statistics, contributors, and a compare link, and sections with nothing to say are omitted entirely. Every entry is still text a person wrote — nothing paraphrases a commit or calls a language model. Repository tooling; it delivers no architectural milestone.
+    highlights:
+      - Categorised release sections, statistics, and contributor credits, generated from the commit range the changelog already records
+      - Sections chosen for what a reader of a release cares about, rather than the changelog's ledger categories
+      - Empty sections omitted, and the raw commit list folded away behind a details block
