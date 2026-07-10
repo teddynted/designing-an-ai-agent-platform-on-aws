@@ -182,12 +182,18 @@ Three ideas carry the design:
 
 ### Full architecture (Milestone 1)
 
+The AWS service view — arranged by trust boundary, from the external developer
+and GitHub through the **AWS Cloud → Region → VPC → private subnet** nesting that
+contains the agent:
+
+![AWS architecture diagram: a GitHub webhook enters EventBridge, Lambda dispatches to OpenClaw on EC2 Spot in a private subnet, which calls Ollama for inference with Amazon Bedrock as a fallback, writes artifacts to S3, and orchestrates publication back to GitHub through n8n; CloudWatch collects telemetry and IAM scopes permissions.](docs/architecture/aws-architecture.svg)
+
 The complete design — the reasoning, the AWS service choices and their
 trade-offs, the data and event flows, and the security, cost, observability, and
 scalability models — is documented in the Milestone 1 deliverables:
 
 - 📄 **[Designing an AI Agent Platform on AWS](docs/blog/designing-an-ai-agent-platform-on-aws.md)** — the architecture blog post
-- 🗺️ **[AWS architecture diagram](docs/architecture/aws-architecture.svg)** — the AWS service view (Cloud / Region / VPC / subnets)
+- 🗺️ **[AWS architecture diagram](docs/architecture/aws-architecture.svg)** — the AWS service view above (Cloud / Region / VPC / subnets)
 - 📐 **[Architecture diagrams](docs/architecture/diagrams.md)** — the service view plus four Mermaid flow views (high-level, event flow, component interaction, deployment boundaries)
 
 These are design documents. **No infrastructure is deployed**; Milestone 1 is
