@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,6 +24,8 @@ var (
 	ErrNotRepository = errors.New("not a git repository")
 	// ErrDetachedHead means HEAD does not point at a branch.
 	ErrDetachedHead = errors.New("HEAD is detached")
+	// ErrNoUpstream means the current branch tracks no remote branch.
+	ErrNoUpstream = errors.New("branch has no upstream")
 )
 
 // Field and record separators for the log format. Both are ASCII control
@@ -213,6 +216,95 @@ func (r *Repo) CommitDate(ctx context.Context, rev string) (time.Time, error) {
 // RemoteURL returns the fetch URL configured for remote.
 func (r *Repo) RemoteURL(ctx context.Context, remote string) (string, error) {
 	return r.runner.Run(ctx, "remote", "get-url", remote)
+}
+
+// Upstream returns the tracking branch of the current branch, such as
+// "origin/main". It returns ErrNoUpstream when the branch tracks nothing, which
+// is not a failure: a branch that was never pushed simply has no upstream.
+func (r *Repo) Upstream(ctx context.Context) (string, error) {
+	out, err := r.runner.Run(ctx, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	if err != nil {
+		return "", ErrNoUpstream
+	}
+	return out, nil
+}
+
+// AheadBehind counts the commits HEAD has that upstream lacks, and vice versa.
+// Both zero means the branch is synchronised.
+func (r *Repo) AheadBehind(ctx context.Context, upstream string) (ahead, behind int, err error) {
+	out, err := r.runner.Run(ctx, "rev-list", "--left-right", "--count", upstream+"..."+"HEAD")
+	if err != nil {
+		return 0, 0, err
+	}
+	// git prints "<behind>\t<ahead>": the left side is upstream.
+	fields := strings.Fields(out)
+	if len(fields) != 2 {
+		return 0, 0, fmt.Errorf("unexpected rev-list output %q", out)
+	}
+	if behind, err = strconv.Atoi(fields[0]); err != nil {
+		return 0, 0, fmt.Errorf("parsing the behind count %q: %w", fields[0], err)
+	}
+	if ahead, err = strconv.Atoi(fields[1]); err != nil {
+		return 0, 0, fmt.Errorf("parsing the ahead count %q: %w", fields[1], err)
+	}
+	return ahead, behind, nil
+}
+
+// DiffStat is the size of a change: how many files it touched, and how many
+// lines it added and removed.
+type DiffStat struct {
+	Files      int
+	Insertions int
+	Deletions  int
+}
+
+// Diff summarises the change between two revisions. An empty from diffs against
+// the empty tree, so a first release reports its whole contents.
+func (r *Repo) Diff(ctx context.Context, from, to string) (DiffStat, error) {
+	rev := []string{from, to}
+	if from == "" {
+		// The empty tree object: diffing against it makes every line an
+		// insertion, which is what a first release actually is.
+		rev = []string{emptyTree, to}
+	}
+
+	args := append([]string{"diff", "--shortstat"}, rev...)
+	out, err := r.runner.Run(ctx, args...)
+	if err != nil {
+		return DiffStat{}, err
+	}
+	return parseShortStat(out), nil
+}
+
+// emptyTree is Git's well-known hash of the empty tree object.
+const emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+// parseShortStat reads the output of `git diff --shortstat`, which looks like
+//
+//	12 files changed, 249 insertions(+), 31 deletions(-)
+//
+// Any of the three clauses may be absent when its count is zero.
+func parseShortStat(out string) DiffStat {
+	var stat DiffStat
+	for clause := range strings.SplitSeq(out, ",") {
+		fields := strings.Fields(clause)
+		if len(fields) < 2 {
+			continue
+		}
+		n, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(fields[1], "file"):
+			stat.Files = n
+		case strings.HasPrefix(fields[1], "insertion"):
+			stat.Insertions = n
+		case strings.HasPrefix(fields[1], "deletion"):
+			stat.Deletions = n
+		}
+	}
+	return stat
 }
 
 // Commits lists the commits reachable from to but not from from, newest first.

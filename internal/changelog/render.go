@@ -13,7 +13,9 @@ import (
 //
 // It is the built-in layout, and the reference for anyone writing a custom one:
 // every field it uses is documented on Data. Override it with Options.Template.
-const DefaultNotesTemplate = `## What's Changed
+const DefaultNotesTemplate = `{{with .Summary}}{{.}}
+
+{{end}}## What's Changed
 
 {{if .Groups}}{{range .Groups}}### {{.Heading}}
 
@@ -22,6 +24,10 @@ const DefaultNotesTemplate = `## What's Changed
 {{end}}{{end}}
 {{end}}{{else}}_No user-facing changes._
 
+{{end}}{{with .Contributors}}### Contributors
+
+{{range .}}- {{.Name}} ({{.Commits}} commit{{if ne .Commits 1}}s{{end}})
+{{end}}
 {{end}}{{if .IsFirstRelease}}Initial release.
 {{else if .CompareURL}}Compare changes:
 {{.CompareURL}}
@@ -68,8 +74,14 @@ type Data struct {
 	// Repository is the owner and name behind the links.
 	Repository Repository
 
+	// Summary is a one-paragraph description assembled from the commit counts.
+	// It is empty for a release with no commits.
+	Summary string
 	// Groups holds the non-empty categories, Breaking Changes first.
 	Groups []Group
+	// Contributors are the authors of the release, most prolific first. It is
+	// empty when no commit carries author information.
+	Contributors []Contributor
 	// Stats summarises the release.
 	Stats Stats
 }
@@ -94,6 +106,7 @@ func (o Options) categories() []Category {
 // caller can inspect the statistics without rendering anything.
 func NewData(rel Release, categories []Category) Data {
 	entries := ParseAll(rel.Commits)
+	stats := Statistics(rel.Bump, entries, categories)
 
 	return Data{
 		Tag:            rel.Tag,
@@ -105,8 +118,10 @@ func NewData(rel Release, categories []Category) Data {
 		CompareURL:     rel.CompareURL(),
 		HistoryURL:     rel.HistoryURL(),
 		Repository:     rel.Repo,
+		Summary:        Summary(stats),
 		Groups:         Groups(entries, categories, rel.Repo),
-		Stats:          Statistics(rel.Bump, entries, categories),
+		Contributors:   Contributors(entries),
+		Stats:          stats,
 	}
 }
 

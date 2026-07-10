@@ -105,16 +105,3 @@ func TestFirstNonEmpty(t *testing.T) {
 		t.Errorf("firstNonEmpty = %q, want empty", got)
 	}
 }
-
-func TestCapitalise(t *testing.T) {
-	for in, want := range map[string]string{
-		"create Git tag v1.0.0": "Create Git tag v1.0.0",
-		"minor":                 "Minor",
-		"Already":               "Already",
-		"":                      "",
-	} {
-		if got := capitalise(in); got != want {
-			t.Errorf("capitalise(%q) = %q, want %q", in, got, want)
-		}
-	}
-}

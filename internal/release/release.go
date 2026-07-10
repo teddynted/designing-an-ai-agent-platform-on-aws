@@ -45,6 +45,9 @@ type Git interface {
 	HeadSHA(ctx context.Context) (string, error)
 	CommitDate(ctx context.Context, rev string) (time.Time, error)
 	RemoteURL(ctx context.Context, remote string) (string, error)
+	Upstream(ctx context.Context) (string, error)
+	AheadBehind(ctx context.Context, upstream string) (ahead, behind int, err error)
+	Diff(ctx context.Context, from, to string) (git.DiffStat, error)
 }
 
 // Config is the release policy for one repository.
@@ -115,6 +118,12 @@ type Plan struct {
 
 	// Date is when the release was planned, in UTC.
 	Date time.Time
+	// PreviousDate is when the previous release was tagged. It is the zero
+	// time for a first release, or when the date could not be read.
+	PreviousDate time.Time
+
+	// Diff is how much code the release changes since the previous tag.
+	Diff git.DiffStat
 
 	Commits []changelog.Commit
 	Repo    changelog.Repository
@@ -122,6 +131,25 @@ type Plan struct {
 
 // IsFirstRelease reports whether the repository has no prior release tag.
 func (p *Plan) IsFirstRelease() bool { return p.PreviousTag == "" }
+
+// DaysSincePrevious returns how long it has been since the previous release.
+// ok is false for a first release, or when the previous date is unknown.
+func (p *Plan) DaysSincePrevious() (days int, ok bool) {
+	if p.PreviousDate.IsZero() || p.Date.IsZero() {
+		return 0, false
+	}
+	elapsed := p.Date.Sub(p.PreviousDate)
+	if elapsed < 0 {
+		return 0, false
+	}
+	return int(elapsed.Hours() / 24), true
+}
+
+// Contributors are the authors of the commits in the release, most prolific
+// first. It is empty when no commit carries author information.
+func (p *Plan) Contributors() []changelog.Contributor {
+	return changelog.Contributors(changelog.ParseAll(p.Commits))
+}
 
 // Release converts the plan into the input for rendering notes and statistics.
 func (p *Plan) Release() changelog.Release {
@@ -304,17 +332,33 @@ func (s *Service) Plan(ctx context.Context, bump semver.Bump, prerelease string)
 		return nil, err
 	}
 
+	// The size of the change and the age of the last release are reported, not
+	// enforced. Neither is worth failing a release over, so both degrade to a
+	// zero value when git cannot answer.
+	diff, err := s.git.Diff(ctx, previousTag, "HEAD")
+	if err != nil {
+		diff = git.DiffStat{}
+	}
+	var previousDate time.Time
+	if previousTag != "" {
+		if date, err := s.git.CommitDate(ctx, previousTag); err == nil {
+			previousDate = date.UTC()
+		}
+	}
+
 	return &Plan{
-		Bump:        bump,
-		Branch:      branch,
-		HeadSHA:     head,
-		Current:     current,
-		Next:        next,
-		PreviousTag: previousTag,
-		Tag:         tag,
-		Date:        time.Now().UTC(),
-		Commits:     commits,
-		Repo:        s.repository(ctx),
+		Bump:         bump,
+		Branch:       branch,
+		HeadSHA:      head,
+		Current:      current,
+		Next:         next,
+		PreviousTag:  previousTag,
+		Tag:          tag,
+		Date:         time.Now().UTC(),
+		PreviousDate: previousDate,
+		Diff:         diff,
+		Commits:      commits,
+		Repo:         s.repository(ctx),
 	}, nil
 }
 

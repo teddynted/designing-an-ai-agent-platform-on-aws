@@ -1,0 +1,74 @@
+────────────────────────────────────────────────────────────────────────────
+
+DRY RUN
+
+  Nothing will be modified.
+  Nothing will be pushed.
+  Nothing will be published.
+
+────────────────────────────────────────────────────────────────────────────
+
+Validation
+
+✓ Git repository — inside a Git work tree
+✓ Release branch — on main
+✓ Working tree — clean
+✓ Untracked files — none
+✓ Branch synchronised — up to date with origin/main
+✓ GitHub authentication — GITHUB_TOKEN is set
+
+Release Plan
+
+Repository    teddynted/repo
+Branch        main
+Remote        origin
+Commit        486bcb2
+
+Version Information
+
+Current Version     v1.2.3
+Next Version        v1.3.0
+Increment Type      Minor
+Previous Release    2026-07-01
+Days Since          9 days ago
+Release Date        2026-07-10
+
+Planned Actions
+
+• Would create Git tag v1.3.0
+• Would push tag to origin
+• Would generate release notes
+• Would create GitHub Release
+
+Release Statistics
+
+Total Commits       5
+Features            2
+Fixes               1
+Documentation       1
+Chores              1
+Breaking Changes    1
+Files Changed       30
+Lines Added         +2,881
+Lines Removed       -651
+
+Contributors
+
+• Teddy Kekana (3 commits)
+• Ada Lovelace (2 commits)
+
+Release Confidence
+
+✓ ★★★★★ Ready to release
+
+Summary
+
+✓ Dry run completed successfully
+
+  No tag was created. Nothing was pushed. Nothing was published.
+
+  Run:
+
+      release minor
+
+  to publish v1.3.0.

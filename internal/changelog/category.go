@@ -167,7 +167,7 @@ func itemsFor(entries []Entry, c Category, claimed map[string]bool, repo Reposit
 			items = append(items, newItem(e, repo, false))
 		}
 	}
-	return items
+	return dedupe(items)
 }
 
 func breakingItems(entries []Entry, repo Repository) []Item {
@@ -177,7 +177,31 @@ func breakingItems(entries []Entry, repo Repository) []Item {
 			items = append(items, newItem(e, repo, true))
 		}
 	}
-	return items
+	return dedupe(items)
+}
+
+// dedupe removes items that say the same thing, keeping the first — which, in
+// git log order, is the newest.
+//
+// A cherry-pick onto a release branch, or a commit reverted and reapplied,
+// produces two commits with identical scope and subject. Listing both tells the
+// reader nothing and looks like a bug in the tool.
+func dedupe(items []Item) []Item {
+	if len(items) < 2 {
+		return items
+	}
+
+	seen := make(map[string]bool, len(items))
+	out := items[:0:0]
+	for _, item := range items {
+		key := item.Scope + "\x00" + item.Title
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, item)
+	}
+	return out
 }
 
 // newItem renders one entry. withNote is true only for the Breaking Changes

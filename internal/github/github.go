@@ -132,6 +132,18 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("github: %s %s: %d %s", e.Method, e.Path, e.StatusCode, e.Message)
 }
 
+// Viewer returns the login of the authenticated user, verifying that the token
+// works. It is the cheapest authenticated call the API offers.
+func (c *Client) Viewer(ctx context.Context) (string, error) {
+	var out struct {
+		Login string `json:"login"`
+	}
+	if err := c.do(ctx, http.MethodGet, c.apiURL+"/user", nil, "", &out); err != nil {
+		return "", err
+	}
+	return out.Login, nil
+}
+
 // GetReleaseByTag looks up the release attached to a tag. It returns ErrNotFound
 // when no release exists for that tag yet.
 func (c *Client) GetReleaseByTag(ctx context.Context, owner, repo, tag string) (*Release, error) {

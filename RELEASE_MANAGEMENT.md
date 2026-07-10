@@ -154,14 +154,31 @@ go run ./cmd/release patch   # backwards-compatible bug fixes
 go run ./cmd/release check   # preflight validations only
 ```
 
-These run six checks before anything is written:
+Every run opens with a repository health report, which inspects six things and
+prints all of their verdicts rather than stopping at the first problem:
 
-1. The directory is inside a Git work tree.
-2. `HEAD` is on a branch permitted to release (`main` or `master` by default).
-3. The working tree and index are clean, with no untracked files.
-4. Tags are fetched from the remote, so a stale clone cannot reuse a version.
-5. The computed tag does not already exist.
-6. There is at least one commit since the previous tag.
+| Check | Failure means |
+| --- | --- |
+| Git repository | Not inside a Git work tree |
+| Release branch | On a branch releases are not permitted from |
+| Working tree | Uncommitted changes |
+| Untracked files | Files neither committed nor ignored |
+| Branch synchronised | *(warning only)* behind or ahead of the upstream |
+| GitHub authentication | *(warning only)* `GITHUB_TOKEN` is not set |
+
+A warning never blocks a release. Being behind the upstream is a warning rather
+than a failure because the tag would still be valid — it would simply miss the
+commits you have not fetched, which the report says in as many words.
+
+Three further checks run while the version is calculated, and any of them stops
+the release:
+
+1. Tags are fetched from the remote, so a stale clone cannot reuse a version.
+2. The computed tag does not already exist.
+3. There is at least one commit since the previous tag.
+
+`release check` runs the health report on its own and exits non-zero if any
+check failed, which makes it usable as a CI guard.
 
 Before it writes anything, the command prints three blocks: the **release plan**
 (where the version came from), the **planned actions** (what is about to happen,
@@ -184,6 +201,10 @@ release contains, by category).
 | `--remote <name>` | Use a remote other than `origin` |
 | `--template <file>` | Render notes from a `text/template` file |
 | `--dir <path>` | Operate on a repository elsewhere |
+| `--verify-auth` | Check `GITHUB_TOKEN` against the API; makes a network call |
+| `--verbose` | Narrate each phase as it runs |
+| `--debug` | Print internal diagnostic detail |
+| `--ascii` | Use ASCII markers instead of Unicode icons |
 | `--no-color` | Disable colour; `NO_COLOR` is honoured too |
 
 The prompt is skipped automatically when stdin is not a terminal, so CI never

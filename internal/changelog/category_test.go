@@ -210,3 +210,36 @@ func TestNoCatchAllDropsUnclaimedTypes(t *testing.T) {
 		t.Errorf("groups = %+v, want none", groups)
 	}
 }
+
+// A cherry-pick, or a commit reverted and reapplied, produces two commits that
+// say the same thing. Listing both looks like a bug in the tool.
+func TestGroupsDeduplicatesIdenticalEntries(t *testing.T) {
+	entries := ParseAll([]Commit{
+		{SHA: "aaaaaaa", Subject: "fix(cli): correct the exit code"},
+		{SHA: "bbbbbbb", Subject: "fix(cli): correct the exit code"},
+		{SHA: "ccccccc", Subject: "fix: correct the exit code"},
+	})
+	items := Groups(entries, DefaultCategories(), testRepo)[0].Items
+
+	if len(items) != 2 {
+		t.Fatalf("want 2 items after deduplication, got %d: %+v", len(items), items)
+	}
+	// The newest wins, and git lists newest first.
+	if items[0].SHA != "aaaaaaa" {
+		t.Errorf("the first occurrence should be kept, got %q", items[0].SHA)
+	}
+	// A different scope is a different entry, even with the same subject.
+	if items[1].Scope != "" {
+		t.Errorf("an unscoped commit should survive deduplication: %+v", items[1])
+	}
+}
+
+func TestDedupePreservesSingletons(t *testing.T) {
+	items := []Item{{Title: "only"}}
+	if got := dedupe(items); len(got) != 1 {
+		t.Errorf("dedupe() dropped a lone item: %+v", got)
+	}
+	if got := dedupe(nil); got != nil {
+		t.Errorf("dedupe(nil) = %+v", got)
+	}
+}

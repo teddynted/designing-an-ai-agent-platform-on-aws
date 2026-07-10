@@ -115,11 +115,17 @@ flowchart LR
 | Package | Owns | Must never |
 | --- | --- | --- |
 | `internal/semver` | The Semantic Versioning 2.0.0 grammar, precedence, and increment rules | Know about Git, tags, or files |
-| `internal/changelog` | Conventional Commits parsing, categories, statistics, Markdown rendering | Shell out, or read files other than a template |
+| `internal/changelog` | Conventional Commits parsing, categories, statistics, contributors, the summary, Markdown rendering | Shell out, or read files other than a template |
 | `internal/git` | Every invocation of the `git` binary | Know what a version is |
 | `internal/github` | The GitHub REST calls a release needs | Decide when to create versus update |
-| `internal/release` | Release policy: what is valid, which version is next, what a failure means | Format terminal output |
-| `cmd/release` | Flags, prompts, glyphs, tables, exit codes | Contain version arithmetic |
+| `internal/release` | Release policy: what is valid, which version is next, what a failure means | Format terminal output, or choose a glyph |
+| `cmd/release` | Flags, prompts, glyphs, tables, wrapping, exit codes | Contain version arithmetic |
+
+Within `cmd/release` the same split holds once more: `report.go` knows how the
+release *looks*, and `cut.go` knows what a release *does*. Every print function
+takes data already computed by `internal/release` or `internal/changelog`, which
+is why the whole report can be exercised against golden files without a
+repository, a terminal, or a clock.
 
 ## Key design decisions
 
@@ -157,6 +163,26 @@ sentinel is for the program.
 **Statistics are derived from the same classification as the notes.** They read
 the same `Groups`, so the numbers cannot disagree with the sections above them.
 `TestStatisticsMatchesGroups` pins that.
+
+**The health report describes; it does not decide.** `Service.Health` returns a
+`[]Check` and never an error for a condition it can name, so the CLI shows every
+problem at once instead of stopping at the first. `Plan` still refuses to
+release from a dirty tree — `Health` is the report that explains why, before it
+happens. A `Check` carries a `Level`, not a glyph: the CLI chooses how to draw
+it.
+
+**Confidence is derived, timing is measured, and the summary is counted.** None
+of the three is invented. Five stars means every check passed; each warning
+costs one. The timing section reports elapsed time, never an estimate, because a
+confidently wrong prediction is worse than no number. And `changelog.Summary`
+reads only the commit counts — no commit text reaches it, so it cannot describe
+a release inaccurately.
+
+**Terminal width comes from an `ioctl`, behind a build tag.** It is the one
+place the tool reaches past the portable standard library. The alternative,
+`golang.org/x/term`, would be the project's only third-party dependency, for
+twenty lines of code. Platforms without the syscall fall back to `COLUMNS`, and
+then to eighty columns.
 
 ## Extending the system
 
