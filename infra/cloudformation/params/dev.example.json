@@ -1,0 +1,10 @@
+[
+  { "ParameterKey": "ProjectName", "ParameterValue": "aiap" },
+  { "ParameterKey": "Environment", "ParameterValue": "dev" },
+  { "ParameterKey": "VpcCidr", "ParameterValue": "10.20.0.0/16" },
+  { "ParameterKey": "PublicSubnetCidr", "ParameterValue": "10.20.1.0/24" },
+  { "ParameterKey": "InstanceType", "ParameterValue": "t3.large" },
+  { "ParameterKey": "RootVolumeSize", "ParameterValue": "30" },
+  { "ParameterKey": "SshKeyName", "ParameterValue": "" },
+  { "ParameterKey": "LogRetentionDays", "ParameterValue": "14" }
+]

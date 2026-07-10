@@ -1,0 +1,59 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  AI Agent Platform — Observability foundation (Milestone 2).
+  CloudWatch log groups with explicit retention for the platform's compute and
+  its future agent workloads. This establishes where logs land and how long they
+  are kept; alarms, metrics, and dashboards are added in a later milestone.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aiap
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Lower-case project prefix. Must match the other stacks.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment. Must match the other stacks.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
+    Description: >-
+      Log retention in days. Short by default to keep development cost low;
+      raise it for staging and production.
+
+Resources:
+  # Platform-level logs (bootstrap, systemd, CloudWatch agent output from the
+  # EC2 instance). The name sits under the /${ProjectName}/${Environment}/
+  # namespace that the instance role is scoped to write to.
+  PlatformLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${ProjectName}/${Environment}/platform"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Agent workload logs (OpenClaw, Ollama, n8n) for future milestones. Created
+  # now so the destination exists before the workloads that write to it.
+  AgentLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${ProjectName}/${Environment}/agent"
+      RetentionInDays: !Ref LogRetentionDays
+
+Outputs:
+  PlatformLogGroupName:
+    Description: Name of the platform log group.
+    Value: !Ref PlatformLogGroup
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-PlatformLogGroupName"
+
+  AgentLogGroupName:
+    Description: Name of the agent workload log group.
+    Value: !Ref AgentLogGroup
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-AgentLogGroupName"

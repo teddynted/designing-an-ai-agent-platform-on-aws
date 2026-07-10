@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  AI Agent Platform — Event-driven foundation (Milestone 2).
+  A dedicated EventBridge bus, a placeholder Lambda, and a rule that routes
+  platform events to it. This establishes the event backbone that future
+  milestones extend; the Lambda contains no business logic yet, only enough to
+  prove the wiring end to end.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aiap
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Lower-case project prefix. Must match the other stacks.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment. Must match the other stacks.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
+    Description: Retention for the Lambda's log group, in days.
+
+Resources:
+  # A dedicated event bus keeps platform events off the account's default bus,
+  # so rules, permissions, and archives are scoped to this platform alone.
+  EventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-bus"
+
+  # The Lambda's log group is declared explicitly (rather than letting Lambda
+  # create it implicitly) so that its retention is controlled and its name is
+  # predictable for the IAM policy that scopes writes to it.
+  DispatchFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-dispatch"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Placeholder dispatch function. It logs the event it receives and returns.
+  # Future milestones replace this body with real routing; the infrastructure
+  # around it — the role, the log group, the rule, the permission — stays.
+  DispatchFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: DispatchFunctionLogGroup
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-dispatch"
+      Description: Placeholder event dispatcher; logs the received event.
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 15
+      MemorySize: 128
+      Role:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-LambdaExecutionRoleArn"
+      Code:
+        ZipFile: |
+          import json
+          import logging
+
+          log = logging.getLogger()
+          log.setLevel(logging.INFO)
+
+          def handler(event, context):
+              """Milestone 2 placeholder: log the event and return.
+
+              Real dispatch logic arrives in a later milestone. For now this
+              proves the EventBridge -> Lambda path is wired correctly.
+              """
+              log.info("received event: %s", json.dumps(event))
+              return {"status": "accepted"}
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-dispatch"
+
+  # A rule on the platform bus that forwards platform-sourced events to the
+  # dispatcher. The pattern is intentionally broad for the foundation; later
+  # milestones narrow it per workflow.
+  PlatformEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-platform-events"
+      Description: Route platform events to the dispatch function.
+      EventBusName: !Ref EventBus
+      EventPattern:
+        source:
+          - !Sub "${ProjectName}.${Environment}.platform"
+      State: ENABLED
+      Targets:
+        - Id: dispatch-function
+          Arn: !GetAtt DispatchFunction.Arn
+
+  # Allow EventBridge to invoke the function, scoped to this specific rule.
+  DispatchFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DispatchFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PlatformEventRule.Arn
+
+Outputs:
+  EventBusName:
+    Description: Name of the platform event bus.
+    Value: !Ref EventBus
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-EventBusName"
+
+  EventBusArn:
+    Description: ARN of the platform event bus.
+    Value: !GetAtt EventBus.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-EventBusArn"
+
+  DispatchFunctionArn:
+    Description: ARN of the placeholder dispatch function.
+    Value: !GetAtt DispatchFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-DispatchFunctionArn"

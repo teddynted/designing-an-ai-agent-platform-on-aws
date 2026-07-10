@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  AI Agent Platform — Durable storage (Milestone 2).
+  The artifact bucket where future milestones store generated blog posts,
+  documentation, exports, and shared assets. S3 is the platform's durable store
+  precisely because the compute is not: instances and their EBS volumes are
+  disposable, so anything that must survive an instance lives here.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aiap
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Lower-case project prefix. Must match the other stacks.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment. Must match the other stacks.
+
+  NoncurrentVersionExpirationDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: Days to retain non-current object versions before expiring them.
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    # Retain the bucket if the stack is deleted, so durable artifacts are never
+    # destroyed by a stack teardown. Empty and remove it deliberately instead.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      # Account ID and region make the globally-unique bucket name deterministic,
+      # which is what lets the IAM stack scope to it by convention.
+      BucketName: !Sub "${ProjectName}-${Environment}-artifacts-${AWS::AccountId}-${AWS::Region}"
+      # Encryption at rest with S3-managed keys (no per-request KMS cost). Bucket
+      # keys are enabled in case a KMS key is adopted later.
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      # Block every avenue of public access.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Disable ACLs entirely; the bucket owner owns every object.
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      # Versioning protects generated artifacts from accidental overwrite; the
+      # lifecycle rule keeps the cost of that history bounded.
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref NoncurrentVersionExpirationDays
+          - Id: abort-incomplete-multipart-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-artifacts"
+
+  # Enforce encryption in transit: deny any request that is not over TLS.
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub "${ArtifactBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+Outputs:
+  ArtifactBucketName:
+    Description: Name of the artifact bucket.
+    Value: !Ref ArtifactBucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-ArtifactBucketName"
+
+  ArtifactBucketArn:
+    Description: ARN of the artifact bucket.
+    Value: !GetAtt ArtifactBucket.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-ArtifactBucketArn"
