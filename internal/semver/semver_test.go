@@ -264,3 +264,49 @@ func TestParseBump(t *testing.T) {
 		t.Error("ParseBump(\"nope\") should fail")
 	}
 }
+
+func TestBumpBetween(t *testing.T) {
+	tests := []struct {
+		from, to string
+		want     Bump
+		ok       bool
+	}{
+		{"1.2.3", "2.0.0", BumpMajor, true},
+		{"1.2.3", "1.3.0", BumpMinor, true},
+		{"1.2.3", "1.2.4", BumpPatch, true},
+
+		// A major bump that also moves minor and patch is still a major bump.
+		{"1.9.9", "2.0.0", BumpMajor, true},
+
+		// Only the pre-release advanced, so the change is the smallest one.
+		{"1.3.0-rc.0", "1.3.0-rc.1", BumpPatch, true},
+		{"1.3.0-rc.1", "1.3.0", BumpPatch, true},
+
+		// Nothing to report: equal, or going backwards.
+		{"1.2.3", "1.2.3", 0, false},
+		{"2.0.0", "1.2.3", 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.from+"->"+tt.to, func(t *testing.T) {
+			got, ok := BumpBetween(MustParse(tt.from), MustParse(tt.to))
+			if got != tt.want || ok != tt.ok {
+				t.Errorf("BumpBetween(%s, %s) = %v, %v; want %v, %v", tt.from, tt.to, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+// BumpBetween is the inverse of Bump: whatever Bump produces, BumpBetween
+// should name.
+func TestBumpBetweenInvertsBump(t *testing.T) {
+	for _, from := range []string{"0.0.0", "1.2.3", "1.0.0"} {
+		v := MustParse(from)
+		for _, b := range []Bump{BumpPatch, BumpMinor, BumpMajor} {
+			next := v.Bump(b)
+			got, ok := BumpBetween(v, next)
+			if !ok || got != b {
+				t.Errorf("BumpBetween(%s, %s) = %v, %v; want %v", v, next, got, ok, b)
+			}
+		}
+	}
+}

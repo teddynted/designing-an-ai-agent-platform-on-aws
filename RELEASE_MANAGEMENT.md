@@ -163,6 +163,11 @@ These run six checks before anything is written:
 5. The computed tag does not already exist.
 6. There is at least one commit since the previous tag.
 
+Before it writes anything, the command prints three blocks: the **release plan**
+(where the version came from), the **planned actions** (what is about to happen,
+reflecting the flags you passed), and the **release statistics** (what the
+release contains, by category).
+
 | Flag | Effect |
 | --- | --- |
 | `--dry-run` | Print the plan and the notes; create nothing |
@@ -177,11 +182,29 @@ These run six checks before anything is written:
 | `--no-fetch` | Skip fetching tags from the remote |
 | `--tag-prefix <s>` | Use a prefix other than `v` |
 | `--remote <name>` | Use a remote other than `origin` |
+| `--template <file>` | Render notes from a `text/template` file |
 | `--dir <path>` | Operate on a repository elsewhere |
 | `--no-color` | Disable colour; `NO_COLOR` is honoured too |
 
 The prompt is skipped automatically when stdin is not a terminal, so CI never
 hangs waiting for an answer.
+
+### Dry runs
+
+`--dry-run` performs every read and every calculation, then stops before the
+first write: no tag, no push, no API call. It opens with a fenced `DRY RUN`
+banner, and its action list is phrased in the conditional — `Would create Git
+tag v1.3.0` — so a dry run can never be mistaken for a real one at a glance.
+
+The notes it prints are exactly what would be published. They go to stdout while
+the progress output goes to stderr, so they can be redirected on their own:
+
+```bash
+go run ./cmd/release minor --dry-run > notes.md
+```
+
+Run one before every release. It is the only way to see the notes before the tag
+exists, and a tag cannot be recalled.
 
 ### After the tag
 
@@ -200,6 +223,22 @@ workflow safe. `--dry-run` prints the notes without calling the API.
 
 For GitHub Enterprise Server, pass `--api-url` and `--upload-url`, or set
 `GITHUB_API_URL` and `GITHUB_UPLOAD_URL`.
+
+### Customising the notes
+
+All three commands accept `--template`, a
+[`text/template`](https://pkg.go.dev/text/template) file executed against
+`changelog.Data`. The fields, and a worked example, are in the
+[README](README.md#custom-release-note-templates).
+
+```bash
+go run ./cmd/release publish --tag v1.3.0 --template .github/notes.tmpl
+```
+
+A malformed template fails the command rather than publishing a half-rendered
+release. The annotated tag's own message always uses the built-in layout: a Git
+tag is metadata, and should not change shape because a project restyled its
+notes.
 
 ## Pre-releases
 
@@ -220,21 +259,45 @@ at `.0` on the same core version.
 
 ## Troubleshooting
 
-| Message | Cause | Fix |
+Every failure the CLI raises states what happened, why, and how to resolve it.
+There is nothing to look up:
+
+```console
+$ go run ./cmd/release minor
+
+✗ Tag "v1.3.0" already exists.
+
+A minor bump from 1.2.3 lands on a version that is already tagged.
+
+Possible solutions:
+
+• choose another bump level: major, minor, or patch
+• delete the local tag: git tag -d v1.3.0
+• delete the remote tag: git push origin --delete v1.3.0
+```
+
+The table below is a map of the failures, in case you meet one in a CI log
+rather than a terminal.
+
+| Failure | Cause | Fix |
 | --- | --- | --- |
-| `not a git repository` | Run outside a work tree | `cd` into the repository, or pass `--dir` |
-| `working tree is not clean` | Uncommitted or untracked files | Commit, stash, or `.gitignore` them; the offending paths are listed |
-| `branch is not allowed to publish releases` | Releasing from a feature branch | Switch to `main`, or pass `--branch`/`--any-branch` |
-| `determining the current branch: HEAD is detached` | A tag or commit is checked out | `git switch main` |
-| `no releasable commits since the last tag` | The tag already points at `HEAD` | Commit something, or pass `--allow-empty` |
-| `tag already exists` | The computed version is taken | Usually a pre-release series collision; check `git tag -l` |
-| `GITHUB_TOKEN is not set` | `publish` has no credentials | Export a token with `contents: write` |
+| `… is not inside a Git repository.` | Run outside a work tree | `cd` into the repository, or pass `--dir` |
+| `The working tree has uncommitted changes.` | Uncommitted or untracked files | Commit, stash, or `.gitignore` them; the offending paths are listed |
+| `Releases are not allowed from branch "x".` | Releasing from a feature branch | Switch to `main`, or pass `--branch`/`--any-branch` |
+| `HEAD is detached, so there is no branch to release from.` | A tag or commit is checked out | `git switch main`, or pass `--any-branch` |
+| `No releasable commits since v1.2.3.` | The tag already points at `HEAD` | Commit something, or pass `--allow-empty` |
+| `Tag "v1.3.0" already exists.` | The computed version is taken | Usually a pre-release series collision; check `git tag -l` |
+| `Tag "v9.9.9" does not exist.` | `notes`/`publish` given an unknown tag | `git fetch --tags`, or check the spelling |
+| `GITHUB_TOKEN is not set…` | `publish` has no credentials | Export a token with `contents: write` |
 | `github: … 422 Validation Failed (Release.tag_name: already_exists)` | A release exists but the lookup missed it | Confirm `--repo owner/name` matches the tag's repository |
+
+Exit codes: `1` for a failed release, `2` for a usage error, `130` for a release
+you declined at the prompt.
 
 ### The push failed and the tag exists locally
 
 `Apply` creates the tag before pushing it, so a rejected push leaves a local tag
-behind. The error says so, and tells you the command:
+behind. The error says so, and gives you the command:
 
 ```bash
 git tag -d v1.3.0     # then fix the cause and re-run

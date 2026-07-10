@@ -73,9 +73,10 @@ flowchart LR
     subgraph cl["internal/changelog"]
         cl1["Parse Conventional Commits"]
         cl2["Detect breaking changes"]
-        cl3["Group into sections"]
-        cl4["Render notes and entries"]
-        cl5["Insert into CHANGELOG.md"]
+        cl3["Group into categories"]
+        cl4["Count release statistics"]
+        cl5["Render through text/template"]
+        cl6["Insert into CHANGELOG.md"]
     end
 
     subgraph gt["internal/git"]
@@ -114,11 +115,11 @@ flowchart LR
 | Package | Owns | Must never |
 | --- | --- | --- |
 | `internal/semver` | The Semantic Versioning 2.0.0 grammar, precedence, and increment rules | Know about Git, tags, or files |
-| `internal/changelog` | Conventional Commits parsing, section grouping, Markdown rendering, file insertion | Read or write files, or shell out |
+| `internal/changelog` | Conventional Commits parsing, categories, statistics, Markdown rendering | Shell out, or read files other than a template |
 | `internal/git` | Every invocation of the `git` binary | Know what a version is |
 | `internal/github` | The GitHub REST calls a release needs | Decide when to create versus update |
-| `internal/release` | Release policy: what is valid, which version is next, what a tag says | Format terminal output |
-| `cmd/release` | Flags, prompts, colour, exit codes | Contain version arithmetic |
+| `internal/release` | Release policy: what is valid, which version is next, what a failure means | Format terminal output |
+| `cmd/release` | Flags, prompts, glyphs, tables, exit codes | Contain version arithmetic |
 
 ## Key design decisions
 
@@ -147,12 +148,29 @@ release. `predecessorOf` sorts by rank, so the commit range is always correct.
 remote still gets a changelog, just without hyperlinks. Rendering never blocks a
 release.
 
+**Errors explain themselves, without giving up classification.**
+`release.Error` carries what happened, why, and how to fix it, and formats
+itself across several lines. It wraps a sentinel and implements `Unwrap`, so
+`errors.Is(err, ErrTagExists)` still works: the prose is for the person, the
+sentinel is for the program.
+
+**Statistics are derived from the same classification as the notes.** They read
+the same `Groups`, so the numbers cannot disagree with the sections above them.
+`TestStatisticsMatchesGroups` pins that.
+
 ## Extending the system
 
-**A new changelog section, or a hidden one shown.** `DefaultSections()` in
-`internal/changelog` is data. Reorder it, add a `Section`, or flip `Hidden`.
-Commit types claimed by no section fall through to the catch-all — the section
-that declares the empty type.
+**A new changelog category, or an existing one hidden.** `DefaultCategories()`
+in `internal/changelog` is data. Reorder it, add a `Category`, or set `Hidden`.
+Commit types claimed by no category fall through to the catch-all — the category
+that declares the empty type — so a new type can never silently vanish. Nothing
+else in the package needs to change: grouping, statistics, and rendering all
+read the same list.
+
+**A different release-notes layout.** `RenderNotes` executes a `text/template`
+against `changelog.Data`. Pass `--template notes.tmpl` to override it per
+invocation, or replace `DefaultNotesTemplate`. `Data` is the contract, and it is
+documented field by field in `render.go`.
 
 **A different tag scheme.** `--tag-prefix` already handles `release-1.2.3`.
 Nothing else in the codebase assumes the `v`.

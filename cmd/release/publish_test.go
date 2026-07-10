@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/changelog"
@@ -98,25 +97,6 @@ func TestExpandAssetsInvalidPattern(t *testing.T) {
 	}
 }
 
-func TestConfirm(t *testing.T) {
-	for input, want := range map[string]bool{
-		"y\n": true, "Y\n": true, "yes\n": true, "YES\n": true,
-		"n\n": false, "\n": false, "": false, "maybe\n": false,
-	} {
-		var out strings.Builder
-		got, err := confirm(strings.NewReader(input), &out, "Proceed?")
-		if err != nil {
-			t.Fatalf("confirm(%q): %v", input, err)
-		}
-		if got != want {
-			t.Errorf("confirm(%q) = %v, want %v", input, got, want)
-		}
-		if !strings.Contains(out.String(), "Proceed? [y/N]") {
-			t.Errorf("confirm should print the question, got %q", out.String())
-		}
-	}
-}
-
 func TestFirstNonEmpty(t *testing.T) {
 	if got := firstNonEmpty("", "", "third"); got != "third" {
 		t.Errorf("firstNonEmpty = %q, want third", got)
@@ -126,11 +106,15 @@ func TestFirstNonEmpty(t *testing.T) {
 	}
 }
 
-func TestPluralise(t *testing.T) {
-	if got := pluralise(1, "commit", "commits"); got != "1 commit" {
-		t.Errorf("pluralise(1) = %q", got)
-	}
-	if got := pluralise(0, "commit", "commits"); got != "0 commits" {
-		t.Errorf("pluralise(0) = %q", got)
+func TestCapitalise(t *testing.T) {
+	for in, want := range map[string]string{
+		"create Git tag v1.0.0": "Create Git tag v1.0.0",
+		"minor":                 "Minor",
+		"Already":               "Already",
+		"":                      "",
+	} {
+		if got := capitalise(in); got != want {
+			t.Errorf("capitalise(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

@@ -46,6 +46,33 @@ func (b Bump) String() string {
 	}
 }
 
+// BumpBetween reports which component was incremented to get from one version
+// to the next. ok is false when to does not rank above from, which happens for
+// the first release, where there is nothing to compare against.
+//
+// It is the inverse of Bump, and lets an already-published tag describe itself.
+func BumpBetween(from, to Version) (b Bump, ok bool) {
+	// Components are only meaningful once to is known to outrank from.
+	// Otherwise 2.0.0 to 1.2.3 would look like a minor bump, because its minor
+	// component happens to be larger.
+	if Compare(from, to) >= 0 {
+		return 0, false
+	}
+
+	switch {
+	case to.Major > from.Major:
+		return BumpMajor, true
+	case to.Minor > from.Minor:
+		return BumpMinor, true
+	case to.Patch > from.Patch:
+		return BumpPatch, true
+	default:
+		// The core is unchanged and only the pre-release advanced, as in
+		// 1.3.0-rc.0 to 1.3.0-rc.1, or 1.3.0-rc.1 to 1.3.0.
+		return BumpPatch, true
+	}
+}
+
 // Bump returns the next stable version.
 //
 // When v is a pre-release that already leads to the requested version, the

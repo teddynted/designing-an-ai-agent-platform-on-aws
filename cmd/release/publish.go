@@ -61,7 +61,10 @@ func notesCommand(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	notes := changelog.RenderNotes(rel, changelog.DefaultSections())
+	notes, err := opts.renderNotes(rel)
+	if err != nil {
+		return err
+	}
 
 	if *out == "" {
 		fmt.Fprint(p.out, notes)
@@ -70,7 +73,7 @@ func notesCommand(ctx context.Context, args []string) error {
 	if err := os.WriteFile(*out, []byte(notes), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", *out, err)
 	}
-	p.ok("Wrote the notes for %s to %s", name, *out)
+	p.success("Wrote the notes for %s to %s", name, *out)
 	return nil
 }
 
@@ -103,7 +106,10 @@ func changelogCommand(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	entry := changelog.RenderEntry(rel, changelog.DefaultSections())
+	entry, err := opts.renderEntry(rel)
+	if err != nil {
+		return err
+	}
 
 	if !*write {
 		fmt.Fprint(p.out, entry)
@@ -123,13 +129,13 @@ func changelogCommand(ctx context.Context, args []string) error {
 
 	updated, changed := changelog.Insert(existing, rel.Version.String(), entry)
 	if !changed {
-		p.ok("%s already documents %s, nothing to do", *file, name)
+		p.success("%s already documents %s, nothing to do", *file, name)
 		return nil
 	}
 	if err := os.WriteFile(path, updated, 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
-	p.ok("Added %s to %s", name, *file)
+	p.success("Added %s to %s", name, *file)
 	return nil
 }
 
@@ -170,10 +176,13 @@ func publishCommand(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	notes := changelog.RenderNotes(rel, changelog.DefaultSections())
+	notes, err := opts.renderNotes(rel)
+	if err != nil {
+		return err
+	}
 
 	if *dryRun {
-		p.warn("Dry run: nothing was published")
+		p.dryRunBanner()
 		p.blank()
 		fmt.Fprint(p.out, notes)
 		return nil
@@ -226,7 +235,7 @@ func publishCommand(ctx context.Context, args []string) error {
 	}
 
 	p.blank()
-	p.ok("Release ready: %s", published.HTMLURL)
+	p.success("Release ready: %s", published.HTMLURL)
 	return nil
 }
 
@@ -258,7 +267,7 @@ func uploadAssets(ctx context.Context, client *github.Client, owner, repo string
 		if _, err := client.UploadAsset(ctx, owner, repo, releaseID, path); err != nil {
 			return fmt.Errorf("uploading %s: %w", path, err)
 		}
-		p.ok("Uploaded %s", name)
+		p.success("Uploaded %s", name)
 	}
 	return nil
 }
@@ -268,11 +277,11 @@ func upsertRelease(ctx context.Context, client *github.Client, owner, repo strin
 	existing, err := client.GetReleaseByTag(ctx, owner, repo, in.TagName)
 	switch {
 	case err == nil:
-		p.step("Updating the existing release for %s", in.TagName)
+		p.info("Updating the existing release for %s", in.TagName)
 		return client.UpdateRelease(ctx, owner, repo, existing.ID, in)
 
 	case errors.Is(err, github.ErrNotFound):
-		p.step("Creating the release for %s", in.TagName)
+		p.info("Creating the release for %s", in.TagName)
 		return client.CreateRelease(ctx, owner, repo, in)
 
 	default:
