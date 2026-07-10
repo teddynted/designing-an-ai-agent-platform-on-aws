@@ -24,6 +24,12 @@ TAGS        := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Mi
 # stack that lacks it makes `aws cloudformation deploy` fail.
 EXTRA_03-compute := PurchaseOption=$(PURCHASE)
 
+# Stack states in which the CREATE never succeeded. `aws cloudformation deploy`
+# can only update an existing stack, so a stack stuck in one of these must be
+# deleted before it can be recreated. Nothing durable is lost: the create did
+# not complete, and the S3 bucket is retained independently of its stack.
+WEDGED      := ROLLBACK_COMPLETE ROLLBACK_FAILED CREATE_FAILED DELETE_FAILED
+
 # Stacks in dependency (deploy) order. Delete runs this list in reverse.
 STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observability
 
@@ -62,9 +68,23 @@ deploy: $(addprefix deploy-,$(STACKS)) ## Deploy all stacks in dependency order
 # Deploy one stack. The stack name is prefixed so it is unambiguous in the
 # console, e.g. aiap-dev-01-network. $(EXTRA_$*) adds any stack-specific
 # parameter overrides (currently only compute's PurchaseOption).
+#
+# Self-healing: if the stack is wedged in a failed-create state (from an earlier
+# aborted deploy), it is deleted first, since CloudFormation cannot update it.
+# Healthy, absent, and in-progress stacks are left untouched.
 deploy-%: ## Deploy a single stack, e.g. make deploy-01-network
+	@stack=$(PROJECT)-$(ENV)-$*; \
+	status=$$(aws cloudformation describe-stacks --stack-name $$stack \
+		--region $(REGION) --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE); \
+	case " $(WEDGED) " in \
+		*" $$status "*) \
+			echo "$$stack is $$status — deleting before recreate"; \
+			aws cloudformation delete-stack --stack-name $$stack --region $(REGION); \
+			aws cloudformation wait stack-delete-complete --stack-name $$stack --region $(REGION); \
+			;; \
+	esac; \
 	aws cloudformation deploy \
-		--stack-name $(PROJECT)-$(ENV)-$* \
+		--stack-name $$stack \
 		--template-file $(CFN_DIR)/$*.yaml \
 		--region $(REGION) --capabilities $(CAPS) \
 		--parameter-overrides $(PARAMS) $(EXTRA_$*) \
