@@ -32,3 +32,7 @@ releases:
       - Categorised release sections, statistics, and contributor credits, generated from the commit range the changelog already records
       - Sections chosen for what a reader of a release cares about, rather than the changelog's ledger categories
       - Empty sections omitted, and the raw commit list folded away behind a details block
+  - version: 0.3.0
+    title: v0.3.0
+    status: released
+    date: "2026-07-10"
