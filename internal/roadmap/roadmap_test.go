@@ -372,11 +372,6 @@ func TestRepositoryRoadmapParses(t *testing.T) {
 			t.Errorf("%s: %v", rel.Tag(), err)
 		}
 	}
-	// v0.1.0 shipped, and it delivers milestone 1.
-	shipped := registry.Find(version.MustParse("0.1.0"))
-	if shipped == nil || !shipped.IsReleased() || shipped.Milestone != 1 {
-		t.Errorf("v0.1.0 should be a released milestone 1: %+v", shipped)
-	}
 }
 
 func TestFileLoadMissingIsEmptyNotAnError(t *testing.T) {

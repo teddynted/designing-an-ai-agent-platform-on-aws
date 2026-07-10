@@ -8,31 +8,6 @@
 # `release patch|minor|major` marks the matching entry released and stamps its
 # date. A version cut without an entry here is added rather than rejected.
 releases:
-  - version: 0.1.0
-    title: Initial architecture
-    status: released
-    date: "2026-07-09"
-    milestone: 1
-    summary: Design and documentation only. No application implementation, no CloudFormation templates, no workflows. Establishes the architectural foundation that later milestones build on.
-    highlights:
-      - Three-plane decomposition of control, agent, and inference workloads
-      - Model Gateway seam with an OpenAI-compatible contract
-      - Agent containment by removing privilege rather than filtering prompts
-  - version: 0.2.0
-    title: Release management
-    status: released
-    date: "2026-07-10"
-    summary: "A Go release-management module: SemVer arithmetic, changelog generation from commit history, annotated tagging, and GitHub release publication. Repository tooling; it delivers no architectural milestone."
-  - version: 0.2.1
-    title: Structured release notes
-    status: released
-    date: "2026-07-10"
-    summary: Release notes become an announcement rather than a transcript. Publishing a tag now produces a structured GitHub Release with highlights, categorised sections, statistics, contributors, and a compare link, and sections with nothing to say are omitted entirely. Every entry is still text a person wrote — nothing paraphrases a commit or calls a language model. Repository tooling; it delivers no architectural milestone.
-    highlights:
-      - Categorised release sections, statistics, and contributor credits, generated from the commit range the changelog already records
-      - Sections chosen for what a reader of a release cares about, rather than the changelog's ledger categories
-      - Empty sections omitted, and the raw commit list folded away behind a details block
-  - version: 0.3.0
-    title: v0.3.0
-    status: released
-    date: "2026-07-10"
+  - version: 0.0.0
+    title: Unreleased
+    status: planned
