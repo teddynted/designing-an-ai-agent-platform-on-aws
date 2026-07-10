@@ -193,6 +193,22 @@ to design for them. Spot trades that guarantee for a large discount, and the
 platform is built to make the trade cheap: because the instance is disposable and
 the durable state lives in S3, an interruption costs a restart, not data.
 
+> **A note on scope: this is an educational project, and it deliberately does
+> not run a large GPU instance.** The architecture describes self-hosted model
+> inference on GPU capacity (the Ollama tier), but running it for real would be
+> expensive — GPU instances such as `g5.xlarge` cost roughly $1/hour, far more
+> than the whole rest of this foundation — and, just as importantly, a new AWS
+> account starts with **zero quota** for GPU and for Spot, so the request would
+> be rejected outright until an increase is approved. This very milestone hit
+> that wall with a plain Spot request (`Max spot instance count exceeded`).
+>
+> So the compute here defaults to a **free-tier-eligible `t3.micro`**. Later
+> milestones install and *configure* the agent software, Ollama included, on
+> that instance, but do not run heavy inference on it. Anyone who wants real
+> model workloads changes one parameter (`InstanceType`, and `PurchaseOption`
+> for Spot) and requests the matching quota — the templates already support it;
+> the default simply keeps the project cheap to run and easy to reproduce.
+
 ## Ephemeral Compute Philosophy
 
 The organising principle of the whole compute layer: **the instance is cattle,

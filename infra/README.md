@@ -13,10 +13,19 @@ This file is the operational reference.
 
 ## What this provisions
 
-A dedicated VPC, a disposable EC2 Spot instance, a durable S3 bucket, an
-EventBridge bus with a placeholder Lambda, and CloudWatch log groups — the
-foundation later milestones build on. It installs **no** application software
-(OpenClaw, Ollama, n8n come later).
+A dedicated VPC, a disposable EC2 instance, a durable S3 bucket, an EventBridge
+bus with a placeholder Lambda, and CloudWatch log groups — the foundation later
+milestones build on. It installs **no** application software (OpenClaw, Ollama,
+n8n come later).
+
+> **Educational scope.** This project is built to learn from and to run cheaply,
+> so the compute defaults to a free-tier `t3.micro` and it deliberately does not
+> run a large GPU instance. Later milestones *configure* the agent software
+> (Ollama included) but do not run real model inference — GPU instances are
+> costly (~$1/hour) and new accounts have zero GPU/Spot quota, which would block
+> a deploy. Everything scales up by changing `InstanceType` / `PurchaseOption`
+> and requesting the matching quota; the defaults just keep it free-tier
+> friendly. See [Cost](#cost) and [Troubleshooting](#troubleshooting).
 
 ## Repository layout
 
