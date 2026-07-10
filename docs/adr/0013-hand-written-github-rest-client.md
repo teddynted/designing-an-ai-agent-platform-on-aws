@@ -5,7 +5,7 @@
 
 ## Context
 
-The Release Management module ([13 — Release Management](../architecture/13-release-management.md)) publishes GitHub Releases and reads GitHub's Compare API. It needs exactly seven endpoints:
+The Release Management module ([13 — Release Management](../architecture/13-release-management.md)) publishes GitHub Releases and reads GitHub's Compare API. It needs exactly eight endpoints:
 
 | Verb | Endpoint | Used for |
 |---|---|---|
@@ -16,14 +16,15 @@ The Release Management module ([13 — Release Management](../architecture/13-re
 | `PATCH` | `/repos/{o}/{r}/releases/{id}` | re-publishing after a retry |
 | `DELETE` | `/repos/{o}/{r}/releases/{id}` | removing a bad release |
 | `GET` | `/repos/{o}/{r}/compare/{base}...{head}` | release notes |
+| `GET` | `/repos/{o}/{r}/pulls/{number}` | pull request labels, for categorising release notes |
 
 The obvious implementation is [`github.com/google/go-github`](https://github.com/google/go-github), the de facto Go SDK. It is actively maintained, well tested, and models the entire API surface. The project brief asks that it be evaluated before any custom client is written.
 
 Three facts decided it.
 
-**The SDK's major version moves far faster than the endpoints do.** go-github reached **v75** in September 2025, having passed through v66 within roughly the preceding year. Each major version is a **new module path** (`go-github/v74` → `go-github/v75`), so every bump is an import rewrite across every file that touches it. That churn tracks the whole GitHub API — an endpoint we do not call, changing in a way we do not care about, still moves the import path. For seven stable endpoints, the maintenance is paid in full and the benefit is not collected.
+**The SDK's major version moves far faster than the endpoints do.** go-github reached **v75** in September 2025, having passed through v66 within roughly the preceding year. Each major version is a **new module path** (`go-github/v74` → `go-github/v75`), so every bump is an import rewrite across every file that touches it. That churn tracks the whole GitHub API — an endpoint we do not call, changing in a way we do not care about, still moves the import path. For eight stable endpoints, the maintenance is paid in full and the benefit is not collected.
 
-**The REST contract is versioned independently of any SDK.** GitHub pins it with the `X-GitHub-Api-Version: 2022-11-28` request header. The seven endpoints above have been stable across the SDK's entire major-version run. The thing we actually depend on is the header, not the library.
+**The REST contract is versioned independently of any SDK.** GitHub pins it with the `X-GitHub-Api-Version: 2022-11-28` request header. The eight endpoints above have been stable across the SDK's entire major-version run. The thing we actually depend on is the header, not the library.
 
 **The failure modes we care about are small and specific.** A release pipeline needs to distinguish exactly three things, and the third is the one that costs a day:
 

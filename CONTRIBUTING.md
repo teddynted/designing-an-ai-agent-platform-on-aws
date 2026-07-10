@@ -62,11 +62,36 @@ fix/numstat-rename-parsing
 - Explain **why**, not what. The diff already says what.
 - If the change alters an architectural decision, it needs an ADR. ADRs are immutable once accepted — a changed decision is a *new* ADR that supersedes the old one, so the reasoning trail survives.
 
+**Your PR title is published.** It becomes a bullet in the GitHub Release, verbatim — the tooling reads it out of the merge commit and never rewrites it. Write it for someone deciding whether to upgrade, not for the reviewer who already has the diff open.
+
+```
+Add automated release management for GitHub Releases     ← good
+Fix bug                                                  ← this is what users will read
+```
+
+**Labels decide the section.** Apply one of these, and it beats every other signal except a breaking-change marker:
+
+| Label | Section |
+|---|---|
+| `breaking-change` | ⚠️ Breaking Changes |
+| `security` | 🔒 Security |
+| `feature` | ✨ New Features |
+| `enhancement`, `performance` | 🔄 Improvements |
+| `bug` | 🐛 Bug Fixes |
+| `documentation` | 📚 Documentation |
+| `ci`, `build`, `dependencies`, `refactor`, `tests` | 🏗 Internal |
+
+No label is fine. The tooling falls back to the Conventional Commit type, then to the files you touched, then to the leading verb below. Labels exist for the cases where those get it wrong.
+
+**A release's Highlights come from `RELEASES.yaml`,** not from any commit. If your work is the headline of a release, add a `summary:` and `highlights:` to its entry in the same PR — that is the one place a human writes prose for the release, and a reviewer sees it.
+
 ---
 
 ## Commit messages
 
-**Your commit subjects become the changelog.** This is not a style preference; it is a mechanical fact. The release tooling reads `git log`, classifies each subject, and writes the result into `CHANGELOG.md` and the GitHub Release notes. A vague subject produces a vague changelog entry, and nobody edits it afterwards.
+**Your commit subjects become `CHANGELOG.md`.** This is not a style preference; it is a mechanical fact. The release tooling reads `git log`, classifies each subject, and writes the result into the changelog committed inside the tag. A vague subject produces a vague changelog entry, and nobody edits it afterwards.
+
+(The *GitHub Release* prefers your pull request title, where you have one. Commits that arrive without a pull request are shown by their subject, so both matter.)
 
 Write the subject as an **English imperative**, describing what the commit does to the codebase:
 

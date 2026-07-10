@@ -66,6 +66,31 @@ type Commit struct {
 	Body    string
 	Author  string
 	Date    time.Time
+
+	// Parents are the commit's parent SHAs, oldest first. A merge has more than
+	// one; the root commit has none. Populated by the local repository only:
+	// the forge's compare payload does not carry them.
+	Parents []string
+
+	// Login is the author's account name on the forge, without the leading "@".
+	// Populated by the forge adapter only; local git knows names and addresses,
+	// not accounts. Empty means "unknown", not "none".
+	Login string
+}
+
+// IsMergeCommit reports whether this commit has more than one parent.
+//
+// Distinct from IsMerge, which reads the subject: the forge's payload carries no
+// parents, so subject matching is the only signal available there. Use this when
+// the commit came from local git and the answer must be structural.
+func (c Commit) IsMergeCommit() bool { return len(c.Parents) > 1 }
+
+// FirstParent is the commit this one was built on, or "" for the root commit.
+func (c Commit) FirstParent() string {
+	if len(c.Parents) == 0 {
+		return ""
+	}
+	return c.Parents[0]
 }
 
 // ShortSHA is the abbreviated form used in changelog entries.

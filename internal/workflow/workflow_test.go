@@ -9,6 +9,7 @@ import (
 
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/git"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/release"
+	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/releasenotes"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/version"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/workflow"
 )
@@ -115,6 +116,10 @@ func (f *fakeRepo) Compare(base, head string, headVersion *version.Version) (git
 	return f.comparison, nil
 }
 
+// The release notes builder reads history too.
+func (f *fakeRepo) RevList(base, head string) ([]string, error)      { return nil, nil }
+func (f *fakeRepo) FilesChanged(base, head string) ([]string, error) { return nil, nil }
+
 type fakePublisher struct {
 	published []release.CreateOptions
 	err       error
@@ -162,7 +167,7 @@ func newHarness(t *testing.T, currentVersion string, commits []git.Commit) *harn
 		root:      root,
 		repo:      repo,
 		publisher: publisher,
-		runner:    workflow.NewRunner(repo, comparisons, notes, publisher, release.FixedClock{When: release.MustDate("2026-07-10")}, nil),
+		runner:    workflow.NewRunner(repo, comparisons, notes, releasenotes.NewBuilder(repo, nil, nil), publisher, release.FixedClock{When: release.MustDate("2026-07-10")}, nil),
 	}
 }
 
@@ -577,7 +582,7 @@ func TestRunPublishesWhenAsked(t *testing.T) {
 	if published.Tag != "v0.2.0" {
 		t.Errorf("published tag = %q", published.Tag)
 	}
-	if !strings.Contains(published.Body, "Add the roadmap registry") {
+	if !strings.Contains(published.Body, "feat: add the roadmap registry") {
 		t.Errorf("release body missing entries:\n%s", published.Body)
 	}
 	// The body carries a compare link; the changelog entry does not.
@@ -729,7 +734,7 @@ func tokenlessRunner(t *testing.T) (*workflow.Runner, string) {
 	}
 	comparisons := release.NewComparisonService(repo, nil, true, nil)
 	notes := release.NewNotesService(comparisons, release.FixedClock{When: release.MustDate("2026-07-10")})
-	return workflow.NewRunner(repo, comparisons, notes, nil, nil, nil), root
+	return workflow.NewRunner(repo, comparisons, notes, releasenotes.NewBuilder(repo, nil, nil), nil, nil, nil), root
 }
 
 func TestPublishWithoutAPublisher(t *testing.T) {
@@ -755,7 +760,7 @@ func TestPublishDryRunNeedsNoToken(t *testing.T) {
 	if result.Published {
 		t.Error("a dry run should not publish")
 	}
-	if !strings.Contains(result.Body, "Add the roadmap registry") {
+	if !strings.Contains(result.Body, "feat: add the roadmap registry") {
 		t.Errorf("a dry run should still render the body:\n%s", result.Body)
 	}
 }

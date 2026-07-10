@@ -22,10 +22,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/changelog"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/git"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/github"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/release"
+	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/releasenotes"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/version"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/workflow"
 )
@@ -139,21 +139,25 @@ func run(argv []string) error {
 	repo := git.NewRepo(cfg.root)
 
 	// The host is optional. Without a token this tool still reads local git,
-	// which is what makes `notes` and `--dry-run` work on a laptop.
+	// which is what makes `notes` and `--dry-run` work on a laptop. Pull request
+	// labels and contributor logins are the two things only the forge knows;
+	// without it, classification falls back to commit metadata and file paths.
 	var host release.Host
 	var publisher workflow.Publisher
+	var labels releasenotes.PullRequestSource
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" && cfg.repository != "" {
 		client, err := github.NewClient(cfg.repository, token)
 		if err != nil {
 			return err
 		}
 		releases := github.NewReleases(client)
-		host, publisher = releases, releases
+		host, publisher, labels = releases, releases, releases
 	}
 
 	comparisons := release.NewComparisonService(repo, host, !cfg.noFallback, logger)
 	notes := release.NewNotesService(comparisons, release.SystemClock{})
-	runner := workflow.NewRunner(repo, comparisons, notes, publisher, release.SystemClock{}, logger)
+	body := releasenotes.NewBuilder(repo, labels, logger)
+	runner := workflow.NewRunner(repo, comparisons, notes, body, publisher, release.SystemClock{}, logger)
 
 	options := workflow.Options{
 		Root:        cfg.root,
@@ -199,7 +203,7 @@ func run(argv []string) error {
 		return nil
 
 	case "notes":
-		return printNotes(cfg, notes)
+		return printNotes(cfg, runner, options)
 
 	case "current":
 		current, err := release.NewVersionFile(cfg.root).Read()
@@ -214,20 +218,19 @@ func run(argv []string) error {
 	}
 }
 
-// printNotes renders the notes for the next release without writing anything.
-// The level defaults to patch, because notes do not depend on the level except
-// through the version they are headed with.
-func printNotes(cfg config, notes *release.NotesService) error {
+// printNotes renders the release body for the next release without writing
+// anything. The level defaults to patch, because the notes do not depend on the
+// level except through the version they are headed with.
+func printNotes(cfg config, runner *workflow.Runner, options workflow.Options) error {
 	current, err := release.NewVersionFile(cfg.root).Read()
 	if err != nil {
 		return err
 	}
-	next := current.BumpPatch()
 
-	generated, err := notes.Generate(next, "HEAD")
+	body, err := runner.Preview(current.BumpPatch(), options, "HEAD")
 	if err != nil {
 		return err
 	}
-	fmt.Print(strings.TrimRight(changelog.ReleaseBody(generated, cfg.repository), "\n"), "\n")
+	fmt.Print(strings.TrimRight(body, "\n"), "\n")
 	return nil
 }

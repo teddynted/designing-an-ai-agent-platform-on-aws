@@ -641,6 +641,81 @@ func TestCompareDegradesRenameWithoutPreviousFilename(t *testing.T) {
 	}
 }
 
+// A login can be @-mentioned; a git author name cannot. GitHub supplies the
+// login only when it could match the commit's email to an account.
+func TestCompareMapsAuthorLoginWhenPresent(t *testing.T) {
+	body := `{
+	  "files": [],
+	  "commits": [
+	    {"sha":"a","commit":{"message":"One","author":{"name":"Teddy Kekana","date":"2026-07-09T10:00:00Z"}},"author":{"login":"teddynted"}},
+	    {"sha":"b","commit":{"message":"Two","author":{"name":"Unmatched Person","date":"2026-07-09T11:00:00Z"}},"author":null}
+	  ]
+	}`
+	transport := &fakeTransport{responses: map[string]github.Response{"GET compare/": ok(body)}}
+	got, err := newReleases(t, transport).Compare("v0.1.0", "v0.2.0")
+	if err != nil {
+		t.Fatalf("Compare returned error: %v", err)
+	}
+
+	// Commits arrive newest-first, so "b" precedes "a".
+	unmatched, matched := got.Commits[0], got.Commits[1]
+	if matched.Login != "teddynted" || matched.Author != "Teddy Kekana" {
+		t.Errorf("matched commit = %+v", matched)
+	}
+	if unmatched.Login != "" {
+		t.Errorf("an unmatched author has no login, got %q", unmatched.Login)
+	}
+	if unmatched.Author != "Unmatched Person" {
+		t.Errorf("the git author name should survive: %q", unmatched.Author)
+	}
+}
+
+func TestPullRequest(t *testing.T) {
+	body := `{"number":6,"title":"  Add the release management module  ",
+	           "labels":[{"name":"feature"},{"name":""},{"name":"documentation"}],
+	           "user":{"login":"teddynted"}}`
+	transport := &fakeTransport{responses: map[string]github.Response{"GET pulls/6": ok(body)}}
+
+	pr, err := newReleases(t, transport).PullRequest(6)
+	if err != nil {
+		t.Fatalf("PullRequest returned error: %v", err)
+	}
+	if pr == nil {
+		t.Fatal("PullRequest returned nil")
+	}
+	if pr.Number != 6 || pr.Title != "Add the release management module" {
+		t.Errorf("pr = %+v", pr)
+	}
+	if len(pr.Labels) != 2 || pr.Labels[0] != "feature" || pr.Labels[1] != "documentation" {
+		t.Errorf("labels = %v (empty names must be dropped)", pr.Labels)
+	}
+	if pr.Login != "teddynted" {
+		t.Errorf("login = %q", pr.Login)
+	}
+}
+
+// A number that turns out to be an issue, or a pull request in another
+// repository, is not worth failing a release over.
+func TestPullRequestAbsentIsNilNotError(t *testing.T) {
+	transport := &fakeTransport{responses: map[string]github.Response{}}
+	pr, err := newReleases(t, transport).PullRequest(999)
+	if err != nil {
+		t.Fatalf("a missing pull request is not an error: %v", err)
+	}
+	if pr != nil {
+		t.Errorf("PullRequest() = %v, want nil", pr)
+	}
+}
+
+func TestPullRequestPropagatesRealErrors(t *testing.T) {
+	transport := &fakeTransport{responses: map[string]github.Response{
+		"GET pulls/6": {Status: 403, Headers: map[string]string{"x-ratelimit-remaining": "0"}},
+	}}
+	if _, err := newReleases(t, transport).PullRequest(6); err == nil {
+		t.Error("a rate-limited request should surface as an error")
+	}
+}
+
 func TestCompareRejectsNonVersionRefs(t *testing.T) {
 	transport := &fakeTransport{responses: map[string]github.Response{"GET compare/": ok(`{"files":[],"commits":[]}`)}}
 	if _, err := newReleases(t, transport).Compare("v0.1.0", "HEAD"); err == nil {

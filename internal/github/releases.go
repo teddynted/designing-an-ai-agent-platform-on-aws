@@ -66,6 +66,11 @@ type filePayload struct {
 	PreviousFilename string `json:"previous_filename"`
 }
 
+// commitPayload has two authors, and they are different things. `commit.author`
+// is what git recorded: a name and an email typed into a config file. `author`
+// is the GitHub account GitHub matched that email to, and it may be absent —
+// for a commit authored by someone with no account, or an unverified address.
+// Only the account has a login, and only a login can be @-mentioned.
 type commitPayload struct {
 	SHA    string `json:"sha"`
 	Commit struct {
@@ -75,6 +80,24 @@ type commitPayload struct {
 			Date string `json:"date"`
 		} `json:"author"`
 	} `json:"commit"`
+	Author *struct {
+		Login string `json:"login"`
+	} `json:"author"`
+}
+
+// labelPayload is one label on a pull request.
+type labelPayload struct {
+	Name string `json:"name"`
+}
+
+// pullRequestPayload is the subset of a pull request this system reads.
+type pullRequestPayload struct {
+	Number int            `json:"number"`
+	Title  string         `json:"title"`
+	Labels []labelPayload `json:"labels"`
+	User   *struct {
+		Login string `json:"login"`
+	} `json:"user"`
 }
 
 type comparePayload struct {
@@ -156,13 +179,52 @@ func toFileChange(payload filePayload) git.FileChange {
 
 func toCommit(payload commitPayload) git.Commit {
 	subject, body, _ := strings.Cut(payload.Commit.Message, "\n")
-	return git.Commit{
+	commit := git.Commit{
 		SHA:     payload.SHA,
 		Subject: strings.TrimSpace(subject),
 		Body:    strings.TrimSpace(body),
 		Author:  payload.Commit.Author.Name,
 		Date:    parseTimestamp(payload.Commit.Author.Date),
 	}
+	// Absent when GitHub could not match the commit's email to an account.
+	if payload.Author != nil {
+		commit.Login = payload.Author.Login
+	}
+	return commit
+}
+
+// PullRequest is a merged pull request, as the release notes need it.
+type PullRequest struct {
+	Number int
+	Title  string
+	Labels []string
+	Login  string // the author's account, without the leading "@"
+}
+
+// PullRequest fetches one pull request, for its labels and title.
+//
+// It returns nil when the pull request does not exist. A release note is not
+// worth failing over a number that turned out to be an issue, or a reference to
+// a pull request in another repository.
+func (r *Releases) PullRequest(number int) (*PullRequest, error) {
+	var payload pullRequestPayload
+	if err := r.client.get(fmt.Sprintf("pulls/%d", number), nil, &payload); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	pr := &PullRequest{Number: payload.Number, Title: strings.TrimSpace(payload.Title)}
+	for _, label := range payload.Labels {
+		if name := strings.TrimSpace(label.Name); name != "" {
+			pr.Labels = append(pr.Labels, name)
+		}
+	}
+	if payload.User != nil {
+		pr.Login = payload.User.Login
+	}
+	return pr, nil
 }
 
 // ListReleases returns published and draft releases, newest version first.
@@ -324,6 +386,16 @@ func (r *Releases) UpsertRelease(options release.CreateOptions) (release.Release
 		Title: &options.Title,
 		Body:  &options.Body,
 	})
+}
+
+// PullRequestLabels returns the labels on a pull request, or nothing when it
+// does not exist. It satisfies the release notes' label source.
+func (r *Releases) PullRequestLabels(number int) ([]string, error) {
+	pr, err := r.PullRequest(number)
+	if err != nil || pr == nil {
+		return nil, err
+	}
+	return pr.Labels, nil
 }
 
 // Compare performs GitHub's server-side comparison, which diffs from the merge

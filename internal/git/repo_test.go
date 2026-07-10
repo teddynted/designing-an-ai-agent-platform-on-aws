@@ -325,8 +325,9 @@ func TestPushErrorPropagates(t *testing.T) {
 	}
 }
 
-// logOutput builds the NUL-free, separator-framed output the log format asks for.
-func logOutput(records ...[5]string) string {
+// logOutput builds the NUL-free, separator-framed output the log format asks
+// for. The sixth field is the space-separated parent list.
+func logOutput(records ...[6]string) string {
 	var b strings.Builder
 	for _, r := range records {
 		b.WriteString(strings.Join(r[:], "\x1f"))
@@ -335,13 +336,95 @@ func logOutput(records ...[5]string) string {
 	return b.String()
 }
 
+const logKey = "log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1f%P\x1e "
+
+func TestCommitsBetweenParsesParents(t *testing.T) {
+	runner := &fakeRunner{responses: map[string]string{
+		logKey + "v0.1.0..HEAD": logOutput(
+			[6]string{"merge1", "Merge pull request #6 from x/y", "Add the module", "Teddy", "2026-07-10T00:00:00+02:00", "parentA parentB"},
+			[6]string{"plain1", "Add a thing", "", "Teddy", "2026-07-09T00:00:00+02:00", "parentA"},
+			[6]string{"root1", "Initial commit", "", "Teddy", "2026-07-01T00:00:00+02:00", ""},
+		),
+	}}
+	commits, err := git.NewRepoWithRunner(runner).CommitsBetween("v0.1.0", "HEAD")
+	if err != nil {
+		t.Fatalf("CommitsBetween returned error: %v", err)
+	}
+
+	merge, plain, root := commits[0], commits[1], commits[2]
+
+	if len(merge.Parents) != 2 || !merge.IsMergeCommit() {
+		t.Errorf("merge parents = %v", merge.Parents)
+	}
+	if merge.FirstParent() != "parentA" {
+		t.Errorf("FirstParent() = %q", merge.FirstParent())
+	}
+	if plain.IsMergeCommit() {
+		t.Error("a single-parent commit is not a merge")
+	}
+	// The root commit has no parent, and FirstParent must not panic.
+	if root.IsMergeCommit() || root.FirstParent() != "" {
+		t.Errorf("root = %+v", root)
+	}
+}
+
+func TestRevList(t *testing.T) {
+	runner := &fakeRunner{responses: map[string]string{
+		"rev-list parentA..parentB": "sha3\nsha2\nsha1\n",
+		"rev-list HEAD":             "sha1\n",
+	}}
+	repo := git.NewRepoWithRunner(runner)
+
+	shas, err := repo.RevList("parentA", "parentB")
+	if err != nil {
+		t.Fatalf("RevList returned error: %v", err)
+	}
+	if len(shas) != 3 || shas[0] != "sha3" || shas[2] != "sha1" {
+		t.Errorf("RevList() = %v", shas)
+	}
+
+	// An empty base means "everything reachable from head".
+	if shas, err = repo.RevList("", "HEAD"); err != nil || len(shas) != 1 {
+		t.Errorf("RevList(\"\", HEAD) = %v, %v", shas, err)
+	}
+}
+
+func TestFilesChanged(t *testing.T) {
+	runner := &fakeRunner{responses: map[string]string{
+		"diff --name-only -M -z parentA sha1": "docs/b.md\x00README.md\x00docs/b.md\x00",
+	}}
+	paths, err := git.NewRepoWithRunner(runner).FilesChanged("parentA", "sha1")
+	if err != nil {
+		t.Fatalf("FilesChanged returned error: %v", err)
+	}
+	// Sorted and deduplicated.
+	want := []string{"README.md", "docs/b.md"}
+	if len(paths) != len(want) || paths[0] != want[0] || paths[1] != want[1] {
+		t.Fatalf("FilesChanged() = %v, want %v", paths, want)
+	}
+}
+
+// The root commit has no parent to diff against.
+func TestFilesChangedAgainstTheEmptyTree(t *testing.T) {
+	runner := &fakeRunner{responses: map[string]string{
+		"diff --name-only -M -z " + git.EmptyTree + " root1": "README.md\x00",
+	}}
+	paths, err := git.NewRepoWithRunner(runner).FilesChanged("", "root1")
+	if err != nil {
+		t.Fatalf("FilesChanged returned error: %v", err)
+	}
+	if len(paths) != 1 || paths[0] != "README.md" {
+		t.Errorf("FilesChanged() = %v", paths)
+	}
+}
+
 func TestCommitsBetweenUsesTwoDots(t *testing.T) {
 	out := logOutput(
-		[5]string{"sha1", "Add the roadmap", "", "Teddy", "2026-07-10T00:00:00+02:00"},
-		[5]string{"sha2", "Fix the parser", "BREAKING CHANGE: gone", "Teddy", "2026-07-09T00:00:00+02:00"},
+		[6]string{"sha1", "Add the roadmap", "", "Teddy", "2026-07-10T00:00:00+02:00", ""},
+		[6]string{"sha2", "Fix the parser", "BREAKING CHANGE: gone", "Teddy", "2026-07-09T00:00:00+02:00", ""},
 	)
 	runner := &fakeRunner{responses: map[string]string{
-		"log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1e v0.1.0..HEAD": out,
+		"log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1f%P\x1e v0.1.0..HEAD": out,
 	}}
 
 	commits, err := git.NewRepoWithRunner(runner).CommitsBetween("v0.1.0", "HEAD")
@@ -369,8 +452,8 @@ func TestCommitsBetweenUsesTwoDots(t *testing.T) {
 
 func TestCommitsBetweenWithoutBase(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]string{
-		"log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1e HEAD": logOutput(
-			[5]string{"sha1", "Initial commit", "", "Teddy", "2026-07-01T00:00:00+02:00"},
+		"log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1f%P\x1e HEAD": logOutput(
+			[6]string{"sha1", "Initial commit", "", "Teddy", "2026-07-01T00:00:00+02:00", ""},
 		),
 	}}
 	commits, err := git.NewRepoWithRunner(runner).CommitsBetween("", "HEAD")
@@ -384,7 +467,7 @@ func TestCommitsBetweenWithoutBase(t *testing.T) {
 
 func TestCommitsBetweenRejectsTruncatedRecord(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]string{
-		"log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1e HEAD": "sha1\x1fonly two fields\x1e",
+		"log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1f%P\x1e HEAD": "sha1\x1fonly two fields\x1e",
 	}}
 	if _, err := git.NewRepoWithRunner(runner).CommitsBetween("", "HEAD"); err == nil {
 		t.Error("a log record with too few fields should fail rather than silently truncate")
@@ -405,8 +488,8 @@ func TestCompareUsesThreeDotsAgainstARealBase(t *testing.T) {
 		"M\x00README.md\x00A\x00docs/new.md\x00",
 		"10\t2\tREADME.md\x0040\t0\tdocs/new.md\x00",
 	)
-	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1e v0.1.0..v0.2.0"] = logOutput(
-		[5]string{"sha1", "Add docs", "", "Teddy", "2026-07-10T00:00:00+02:00"},
+	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1f%P\x1e v0.1.0..v0.2.0"] = logOutput(
+		[6]string{"sha1", "Add docs", "", "Teddy", "2026-07-10T00:00:00+02:00", ""},
 	)
 	runner := &fakeRunner{responses: responses}
 
@@ -420,7 +503,7 @@ func TestCompareUsesThreeDotsAgainstARealBase(t *testing.T) {
 	if !runner.called("diff --name-status -M -z v0.1.0...v0.2.0") {
 		t.Errorf("diff should use three dots; calls: %v", runner.calls)
 	}
-	if !runner.called("log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1e v0.1.0..v0.2.0") {
+	if !runner.called("log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1f%P\x1e v0.1.0..v0.2.0") {
 		t.Errorf("log should use two dots; calls: %v", runner.calls)
 	}
 
@@ -439,8 +522,8 @@ func TestCompareUsesThreeDotsAgainstARealBase(t *testing.T) {
 func TestCompareAgainstEmptyTreeForTheFirstRelease(t *testing.T) {
 	spec := git.EmptyTree + "..v0.1.0"
 	responses := diffResponses(spec, "A\x00README.md\x00", "5\t0\tREADME.md\x00")
-	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1e v0.1.0"] = logOutput(
-		[5]string{"sha1", "Initial commit", "", "Teddy", "2026-07-01T00:00:00+02:00"},
+	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1f%P\x1e v0.1.0"] = logOutput(
+		[6]string{"sha1", "Initial commit", "", "Teddy", "2026-07-01T00:00:00+02:00", ""},
 	)
 	runner := &fakeRunner{responses: responses}
 
@@ -461,7 +544,7 @@ func TestCompareAgainstEmptyTreeForTheFirstRelease(t *testing.T) {
 // case when generating notes for a tag that does not exist yet.
 func TestCompareWithHeadVersionOverride(t *testing.T) {
 	responses := diffResponses("v0.1.0...HEAD", "M\x00README.md\x00", "1\t1\tREADME.md\x00")
-	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1e v0.1.0..HEAD"] = ""
+	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1f%P\x1e v0.1.0..HEAD"] = ""
 	runner := &fakeRunner{responses: responses}
 
 	head := version.MustParse("0.2.0")
@@ -502,7 +585,7 @@ func TestCompareParsesRenamesAndBinaries(t *testing.T) {
 	}, "\x00") + "\x00"
 
 	responses := diffResponses("v0.1.0...v0.2.0", nameStatus, numstat)
-	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1e v0.1.0..v0.2.0"] = ""
+	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1f%P\x1e v0.1.0..v0.2.0"] = ""
 	runner := &fakeRunner{responses: responses}
 
 	c, err := git.NewRepoWithRunner(runner).Compare("v0.1.0", "v0.2.0", nil)
@@ -561,7 +644,7 @@ func TestCompareParsesPathsWithNewlines(t *testing.T) {
 		"A\x00"+awkward+"\x00",
 		"2\t0\t"+awkward+"\x00",
 	)
-	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1e v0.1.0..v0.2.0"] = ""
+	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1f%P\x1e v0.1.0..v0.2.0"] = ""
 	runner := &fakeRunner{responses: responses}
 
 	c, err := git.NewRepoWithRunner(runner).Compare("v0.1.0", "v0.2.0", nil)
@@ -575,7 +658,7 @@ func TestCompareParsesPathsWithNewlines(t *testing.T) {
 
 func TestCompareRejectsTruncatedRenameRecord(t *testing.T) {
 	responses := diffResponses("v0.1.0...v0.2.0", "R100\x00only-one-path\x00", "")
-	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1e v0.1.0..v0.2.0"] = ""
+	responses["log --format=%H\x1f%s\x1f%b\x1f%an\x1f%aI\x1f%P\x1e v0.1.0..v0.2.0"] = ""
 	runner := &fakeRunner{responses: responses}
 
 	if _, err := git.NewRepoWithRunner(runner).Compare("v0.1.0", "v0.2.0", nil); err == nil {
