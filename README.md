@@ -1,7 +1,8 @@
 # Designing an AI Agent Platform on AWS
 
 [![Status](https://img.shields.io/badge/status-planning-blue)](#roadmap)
-[![Next milestone](https://img.shields.io/badge/next-M1%20Initial%20Architecture-lightgrey)](#milestone-1--initial-architecture)
+[![Milestone 1](https://img.shields.io/badge/M1%20Initial%20Architecture-documented-brightgreen)](docs/blog/designing-an-ai-agent-platform-on-aws.md)
+[![Next milestone](https://img.shields.io/badge/next-M2%20CloudFormation-lightgrey)](#milestone-2--cloudformation-infrastructure)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -90,7 +91,7 @@ Being explicit, because everything else on this page is aspirational:
 | Component | Status | Notes |
 | --- | --- | --- |
 | Release management tooling | ✅ **Implemented** | A Go CLI and workflows that version, tag, and publish this repository. See [RELEASE_MANAGEMENT.md](RELEASE_MANAGEMENT.md) |
-| Platform architecture | 📋 Planned | [Milestone 1](#milestone-1--initial-architecture) |
+| Platform architecture | 📝 **Documented** | [Milestone 1](#milestone-1--initial-architecture) is complete: the [architecture blog post](docs/blog/designing-an-ai-agent-platform-on-aws.md) and [diagrams](docs/architecture/diagrams.md). Design only — nothing deployed |
 | AWS infrastructure | 📋 Planned | [Milestone 2](#milestone-2--cloudformation-infrastructure) onwards |
 | Every integration below | 📋 Planned | Nothing is deployed |
 
@@ -178,6 +179,18 @@ Three ideas carry the design:
    is what makes Spot safe to rely on.
 3. **The agent is a deputy.** OpenClaw holds a shell. Its credentials, network
    egress, and filesystem are the security boundary — not the prompt.
+
+### Full architecture (Milestone 1)
+
+The complete design — the reasoning, the AWS service choices and their
+trade-offs, the data and event flows, and the security, cost, observability, and
+scalability models — is documented in the Milestone 1 deliverables:
+
+- 📄 **[Designing an AI Agent Platform on AWS](docs/blog/designing-an-ai-agent-platform-on-aws.md)** — the architecture blog post
+- 📐 **[Architecture diagrams](docs/architecture/diagrams.md)** — high-level, event flow, component interaction, and deployment boundaries
+
+These are design documents. **No infrastructure is deployed**; Milestone 1 is
+architecture only.
 
 ## Technology Stack
 
@@ -311,16 +324,22 @@ flowchart TB
 
 #### Milestone 1 — Initial Architecture
 
+✅ **Documented — design only, nothing deployed.**
+[Blog post](docs/blog/designing-an-ai-agent-platform-on-aws.md) ·
+[Diagrams](docs/architecture/diagrams.md)
+
 *Documentation only. No infrastructure is created.*
 
 - **Objective** — Establish the platform architecture, its constraints, and the
   decisions that follow from them, before any resource exists.
 - **Primary focus** — Decomposition by statefulness and interruption tolerance;
   the security model for an agent with a shell; the cost model.
-- **Related technologies** — Architectural decision records, Mermaid, AWS
+- **Related technologies** — Architecture documentation, Mermaid, AWS
   Well-Architected Framework.
-- **Expected outcome** — An architecture document set and a numbered series of
-  ADRs, each recording its rejected alternatives and negative consequences.
+- **Outcome** — An architecture blog post and four architecture diagrams
+  (high-level, event flow, component interaction, deployment boundaries),
+  covering the AWS service choices, data and event flows, and the security,
+  cost, observability, and scalability models.
 
 ### Phase 1 — Infrastructure
 
@@ -540,6 +559,13 @@ that is worth saying too.
 
 The series is intended to be readable in order, as the story of a platform being
 built, or out of order, as a set of independent AWS design studies.
+
+### Posts
+
+| # | Post | Status |
+| --- | --- | --- |
+| 1 | [Designing an AI Agent Platform on AWS](docs/blog/designing-an-ai-agent-platform-on-aws.md) | ✅ Published |
+| 2+ | One per milestone, as each is built | 📋 Planned |
 
 ## Future Enhancements
 
