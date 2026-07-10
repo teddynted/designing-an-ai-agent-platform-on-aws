@@ -100,7 +100,7 @@ aws cloudformation deploy \
   --template-file cloudformation/01-network.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides ProjectName=aiap Environment=dev \
-  --region eu-west-1
+  --region us-east-1
 ```
 
 ## Continuous integration & deployment
@@ -115,17 +115,44 @@ templates into GitHub Actions.
   environment, and type `deploy` to confirm. The job assumes an IAM role over
   OIDC — there are no long-lived secrets.
 
-Deployment requires one-time setup:
+### One-time deploy setup
 
-1. Create an IAM OIDC identity provider for `token.actions.githubusercontent.com`.
-2. Create a deploy role that trusts this repository, and set its ARN as the
-   repository (or environment) variable `AWS_DEPLOY_ROLE_ARN`.
-3. Set the target region as the variable `AWS_REGION`.
-4. Create GitHub environments `dev`, `staging`, and `prod`; add required
-   reviewers to `prod` for a manual approval gate.
+Deployment needs an AWS OIDC provider and a deploy role. An account admin creates
+both, idempotently, with:
 
-Until that is configured, the validation job still runs and the deploy job is
-simply never triggered.
+```bash
+make -C infra bootstrap        # PROJECT and REGION are overridable
+```
+
+[`scripts/bootstrap-github-oidc.sh`](scripts/bootstrap-github-oidc.sh):
+
+1. creates (or updates) the IAM OIDC identity provider for
+   `token.actions.githubusercontent.com`;
+2. creates (or updates) a deploy role trusting **this repository**, with a
+   starter permissions policy scoped to this project's resources
+   ([`scripts/deploy-role-policy.json`](scripts/deploy-role-policy.json) —
+   tighten before production);
+3. sets the repository variables `AWS_DEPLOY_ROLE_ARN` and `AWS_REGION`, if the
+   GitHub CLI is authenticated (otherwise it prints them for you to set by hand).
+
+It is safe to re-run: every step checks before it creates. Create the GitHub
+environments `dev`, `staging`, and `prod` yourself, and add required reviewers to
+`prod` for a manual approval gate.
+
+Until this is done, the validation job still runs and the deploy job is simply
+never triggered.
+
+### A reminder on first push
+
+[`.githooks/pre-push`](../.githooks/pre-push) prints a one-time, **non-blocking**
+notice if deployment is not configured yet, pointing at `make bootstrap`. It
+never creates anything and never blocks a push — bootstrapping cloud IAM is a
+deliberate admin action, not a side effect of pushing. Enable the repository's
+hooks once per clone:
+
+```bash
+make -C infra install-hooks    # sets core.hooksPath to .githooks
+```
 
 ## Parameters
 
@@ -148,7 +175,7 @@ are tuned for a low-cost development environment.
 ## Cost
 
 Designed to cost almost nothing at rest. Rough **development** estimate
-(`eu-west-1`, one `t3.large` Spot instance, light use):
+(`us-east-1`, one `t3.large` Spot instance, light use):
 
 | Resource | Basis | Est. monthly (USD) |
 | --- | --- | --- |

@@ -300,7 +300,7 @@ The foundation is designed to cost almost nothing at rest, through five choices:
 5. **Appropriate sizing** — a modest `t3.large` for the foundation, with GPU
    types chosen only when Ollama needs them.
 
-A rough development estimate (`eu-west-1`, part-time use):
+A rough development estimate (`us-east-1`, part-time use):
 
 | Resource | Est. monthly (USD) |
 | --- | --- |

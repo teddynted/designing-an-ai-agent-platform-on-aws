@@ -6,7 +6,7 @@
 
 PROJECT     ?= aiap
 ENV         ?= dev
-REGION      ?= eu-west-1
+REGION      ?= us-east-1
 CFN_DIR     := cloudformation
 
 # Named IAM roles require this capability acknowledgement.
@@ -19,11 +19,19 @@ COMMON      := --region $(REGION) --capabilities $(CAPS) \
 STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observability
 
 .DEFAULT_GOAL := help
-.PHONY: help lint validate deploy delete outputs $(addprefix deploy-,$(STACKS))
+.PHONY: help lint validate deploy delete outputs bootstrap install-hooks \
+        $(addprefix deploy-,$(STACKS))
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+
+bootstrap: ## One-time (admin): create the GitHub Actions OIDC provider + deploy role
+	PROJECT=$(PROJECT) REGION=$(REGION) scripts/bootstrap-github-oidc.sh
+
+install-hooks: ## Enable the repository's git hooks (one-time, per clone)
+	@git -C .. config core.hooksPath .githooks
+	@echo "git hooks enabled (core.hooksPath = .githooks)"
 
 lint: ## Lint every template with cfn-lint
 	cfn-lint $(CFN_DIR)/*.yaml

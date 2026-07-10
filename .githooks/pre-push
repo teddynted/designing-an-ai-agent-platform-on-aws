@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+#
+# pre-push — a one-time, non-blocking reminder to configure GitHub Actions
+# deployments.
+#
+# It never blocks a push and never changes anything, in AWS or in GitHub. If the
+# deploy role has not been configured, it prints a short pointer to the
+# bootstrap script once, then stays quiet. Creating the OIDC provider and IAM
+# role is a privileged, once-per-account job (see bootstrap-github-oidc.sh) — not
+# something a push should ever do on your behalf.
+#
+# Enable with:  make -C infra install-hooks   (sets core.hooksPath to .githooks)
+
+set -euo pipefail
+
+marker="$(git rev-parse --git-dir)/.oidc-reminder-shown"
+
+# Only ever remind once per clone, and only if the infra workflow exists.
+[[ -f "$marker" ]] && exit 0
+[[ -f .github/workflows/infra.yml ]] || { : > "$marker"; exit 0; }
+
+configured=""
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
+  if [[ -n "$repo" ]] && gh variable list --repo "$repo" 2>/dev/null | grep -q '^AWS_DEPLOY_ROLE_ARN'; then
+    configured=1
+  fi
+fi
+
+if [[ -z "$configured" ]]; then
+  cat >&2 <<'MSG'
+
+ℹ  Infrastructure deployment is not configured yet.
+
+   The GitHub Actions "Infrastructure" workflow can deploy the CloudFormation
+   stacks, but its deploy job needs an AWS OIDC role first. An account admin can
+   create it once with:
+
+       make -C infra bootstrap
+
+   Validation runs without it; only the manual deploy job needs it. This notice
+   appears once and does not block your push.
+
+MSG
+fi
+
+# Remind at most once, whatever the outcome.
+: > "$marker"
+exit 0
