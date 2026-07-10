@@ -1,5 +1,0 @@
-# `make build` compiles the release CLI here.
-/bin/
-
-# The diagram generator's virtualenv.
-.venv/
