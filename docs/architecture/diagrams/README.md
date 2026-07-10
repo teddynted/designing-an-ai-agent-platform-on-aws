@@ -35,23 +35,18 @@ Writes `aws-architecture.png` into this directory. The Graphviz intermediate fil
 
 Hand-authored, no build step, no dependencies. Geometry is explicit, so it is easy to break by moving something into a neighbour.
 
-Three checks after any edit. Each one caught a real defect during authoring:
+Two checks worth running after any edit — both of these caught real defects during authoring:
 
 ```bash
 # 1. XML well-formedness. (SVG comments cannot contain `--`.)
 python3 -c "import xml.dom.minidom as m; m.parse('docs/architecture/diagrams/aws-architecture.svg')"
 
-# 2. Geometry lint: nothing overlapping anything it shouldn't.
-python3 docs/architecture/diagrams/check_geometry.py
-
-# 3. Actually look at it. macOS QuickLook rasterises SVG:
+# 2. Actually look at it. macOS QuickLook rasterises SVG:
 qlmanage -t -s 1440 -o /tmp docs/architecture/diagrams/aws-architecture.svg
 open /tmp/aws-architecture.svg.png
 ```
 
-**Check 2** enforces the invariants that hand-placed coordinates keep breaking: a card must sit wholly inside every container it touches, containers must nest rather than partially overlap, and no container border may pass through a text label. It exits non-zero on a violation.
-
-**Check 3** still matters, because the lint cannot see everything. Arrows are paths, not boxes: one routed by hand will happily run straight through a component's card and the lint will not notice. Only your eyes will. QuickLook squares its output, so wide diagrams get cropped — to inspect the right-hand edge, temporarily narrow the `viewBox`; to see the whole width, pad it to a square.
+The second one matters. Arrows routed by hand will happily pass straight through a component's card, and nothing but your eyes will tell you. QuickLook crops wide diagrams to a square — to inspect the right-hand edge, temporarily narrow the `viewBox`.
 
 The SVG carries a `prefers-color-scheme: dark` block, so it inverts for dark-mode readers. Verify both themes, not just the one your machine is in.
 
