@@ -202,11 +202,13 @@ the durable state lives in S3, an interruption costs a restart, not data.
 > be rejected outright until an increase is approved. This very milestone hit
 > that wall with a plain Spot request (`Max spot instance count exceeded`).
 >
-> So the compute here defaults to a **free-tier-eligible `t3.micro`**. Later
-> milestones install and *configure* the agent software, Ollama included, on
-> that instance, but do not run heavy inference on it. Anyone who wants real
-> model workloads changes one parameter (`InstanceType`, and `PurchaseOption`
-> for Spot) and requests the matching quota — the templates already support it;
+> So the compute here defaults to a general-purpose **`t3.xlarge`** — and
+> `InstanceType=t3.micro` gives a **free-tier-eligible**, near-zero-cost
+> environment. Later milestones install and *configure* the agent software,
+> Ollama included, on that instance, but do not run heavy inference on it.
+> Anyone who wants real model workloads changes one parameter (`InstanceType`,
+> and `PurchaseOption` for Spot) and requests the matching quota — the templates
+> already support it;
 > the default simply keeps the project cheap to run and easy to reproduce.
 
 ## Ephemeral Compute Philosophy
@@ -313,18 +315,18 @@ The foundation is designed to cost almost nothing at rest, through five choices:
    effectively nothing at the foundation's volumes.
 4. **Disposable infrastructure** — no idle EBS, no orphaned volumes, no
    always-on managed database.
-5. **Appropriate sizing** — a `t3.micro` for the foundation (free-tier
-   eligible), sized up only if a workload ever needs it.
+5. **Right-sizing, and a free-tier escape hatch** — the default is a `t3.xlarge`,
+   but `InstanceType=t3.micro` gives a free-tier, near-zero-cost environment.
 
-A rough development estimate (`us-east-1`, part-time use):
+A rough development estimate (`us-east-1`, the default `t3.xlarge`):
 
 | Resource | Est. monthly (USD) |
 | --- | --- |
-| EC2 (`t3.micro`) | ~$0 on the free tier; else ~$0–8 |
-| Root EBS (30 GiB gp3) | ~$0 on the free tier; else ~$2.40 |
+| EC2 (`t3.xlarge`) | ~$120 (24×7) / ~$70 (scheduled 18:00–08:00) |
+| Root EBS (30 GiB gp3) | ~$2.40 |
 | S3, Lambda, EventBridge, CloudWatch | <$2 combined |
 | VPC / IGW / SG / routes (no NAT) | $0 |
-| **Total** | **~$0–12 / month** (near $0 on the free tier) |
+| **Total** | **~$75–125 / month** (a few dollars on a free-tier `t3.micro`) |
 
 Stop the instance overnight and it drops further. The architecture's resting
 cost trends toward the cost of its storage — which is the goal.

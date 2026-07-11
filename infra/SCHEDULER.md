@@ -200,12 +200,13 @@ before any free-tier credit.
 
 | Instance | 24×7 (On-Demand) | 14h/day scheduled | Saving |
 | --- | --- | --- | --- |
-| `t3.micro` | ~$7.50/mo | ~$4.40/mo | ~$3/mo (or $0 on the free tier) |
-| `t3.large` | ~$60/mo | ~$35/mo | ~$25/mo |
+| `t3.micro` (free-tier override) | ~$7.50/mo | ~$4.40/mo | ~$3/mo (or $0 on the free tier) |
+| `t3.xlarge` (the default) | ~$120/mo | ~$70/mo | ~$50/mo |
 | `g5.xlarge` (GPU) | ~$730/mo | ~$425/mo | ~$305/mo |
 
-The saving scales with instance size — modest for the educational `t3.micro`,
-substantial for the GPU instances a real inference tier would use.
+The saving scales with instance size — around $50/month on the default
+`t3.xlarge`, near-zero either way on a free-tier `t3.micro`, and largest on the
+GPU instances a real inference tier would use.
 
 **Spot considerations.** Scheduling stop/start requires a **persistent** Spot
 request (`SpotInterruptionBehavior=stop`). A persistent request keeps trying to
