@@ -22,12 +22,12 @@ Parameters:
 
   InstanceType:
     Type: String
-    Default: t3.micro
+    Default: t3.xlarge
     Description: >-
-      Instance type for the foundation. t3.micro is free-tier eligible and
-      sufficient for this educational setup: later milestones install and
-      configure the agent software (including Ollama) here, but do not run heavy
-      model inference, so no GPU type is needed. Raise it to run real workloads.
+      Instance type for the foundation. t3.xlarge (4 vCPU, 16 GiB) is NOT
+      free-tier eligible and costs roughly $0.17/hour on-demand (~$120/month if
+      left running). Use the instance scheduler to limit its hours, or set
+      t3.micro (free-tier eligible) for a near-zero-cost environment.
 
   RootVolumeSize:
     Type: Number
@@ -55,9 +55,23 @@ Parameters:
       which fails with "Max spot instance count exceeded"; switch back to spot
       once a Spot quota increase is approved.
 
+  SpotInterruptionBehavior:
+    Type: String
+    Default: terminate
+    AllowedValues: [terminate, stop]
+    Description: >-
+      What happens to a Spot instance on interruption. "terminate" (a one-time
+      request) is the disposable default. Choose "stop" (a persistent request)
+      only if you intend to stop/start the instance on a schedule — a Spot
+      instance can be stopped and started only when it was launched with the
+      "stop" behaviour. Ignored for on-demand. On-demand is always stoppable.
+
 Conditions:
   # Request Spot only when asked. On-demand omits InstanceMarketOptions entirely.
   UseSpot: !Equals [!Ref PurchaseOption, spot]
+  # A stoppable Spot instance needs a persistent request; the disposable default
+  # uses a one-time request that can only be terminated.
+  StoppableSpot: !Equals [!Ref SpotInterruptionBehavior, stop]
 
 Resources:
   # A launch template carries everything about how the instance boots. The
@@ -84,17 +98,17 @@ Resources:
           HttpTokens: required
           HttpEndpoint: enabled
           HttpPutResponseHopLimit: 1
-        # Purchase on the Spot market by default: disposable, so on interruption
-        # it terminates rather than stops, and is recreated by re-deploying this
-        # stack (auto-recovery via an Auto Scaling group is a later milestone,
-        # which reuses this template). On-demand omits this block entirely.
+        # Purchase on the Spot market by default. Disposable "terminate" behaviour
+        # uses a one-time request; "stop" (for scheduled stop/start) uses a
+        # persistent request, the only kind a Spot instance can be stopped from.
+        # On-demand omits this block entirely and is always stoppable.
         InstanceMarketOptions:
           !If
             - UseSpot
             - MarketType: spot
               SpotOptions:
-                SpotInstanceType: one-time
-                InstanceInterruptionBehavior: terminate
+                SpotInstanceType: !If [StoppableSpot, persistent, one-time]
+                InstanceInterruptionBehavior: !Ref SpotInterruptionBehavior
             - !Ref "AWS::NoValue"
         # The only volume is the root volume: encrypted, gp3, and deleted with
         # the instance. There is deliberately no secondary or persistent volume.

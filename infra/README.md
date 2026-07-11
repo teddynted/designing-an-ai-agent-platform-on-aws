@@ -18,14 +18,16 @@ bus with a placeholder Lambda, and CloudWatch log groups — the foundation late
 milestones build on. It installs **no** application software (OpenClaw, Ollama,
 n8n come later).
 
-> **Educational scope.** This project is built to learn from and to run cheaply,
-> so the compute defaults to a free-tier `t3.micro` and it deliberately does not
-> run a large GPU instance. Later milestones *configure* the agent software
-> (Ollama included) but do not run real model inference — GPU instances are
-> costly (~$1/hour) and new accounts have zero GPU/Spot quota, which would block
-> a deploy. Everything scales up by changing `InstanceType` / `PurchaseOption`
-> and requesting the matching quota; the defaults just keep it free-tier
-> friendly. See [Cost](#cost) and [Troubleshooting](#troubleshooting).
+> **Educational scope.** This project is built to learn from. The compute
+> defaults to a `t3.xlarge` on **Spot** (~$0.05/hour, ~$36/month; ~$0.17/hour
+> On-Demand — see [Cost](#cost)); set `InstanceType=t3.micro` for a **free-tier**,
+> near-zero-cost environment. It
+> deliberately does not run a large **GPU** instance: later milestones
+> *configure* the agent software (Ollama included) but do not run real model
+> inference, as GPU instances are costly (~$1/hour) and new accounts have zero
+> GPU/Spot quota, which would block a deploy. Everything scales by changing
+> `InstanceType` / `PurchaseOption` and requesting the matching quota. See
+> [Cost](#cost) and [Troubleshooting](#troubleshooting).
 
 ## Repository layout
 
@@ -180,7 +182,7 @@ are tuned for a low-cost development environment.
 | `Environment` | `dev` | all | `dev` \| `staging` \| `prod`. |
 | `VpcCidr` | `10.20.0.0/16` | network | Room for future subnets. |
 | `PublicSubnetCidr` | `10.20.1.0/24` | network | The foundation's single subnet. |
-| `InstanceType` | `t3.micro` | compute | Free-tier eligible. Raise it only to run real model workloads. |
+| `InstanceType` | `t3.xlarge` | compute | 4 vCPU/16 GiB, not free-tier (~$0.05/hr on the default Spot, ~$0.17/hr On-Demand). Set `t3.micro` for a free-tier environment. |
 | `PurchaseOption` | `spot` | compute | `spot` or `on-demand`. Use `on-demand` if the account's Spot quota is zero. |
 | `RootVolumeSize` | `30` | compute | GiB. OS and runtime temp only. |
 | `SshKeyName` | *(empty)* | compute | Empty disables SSH; use SSM Session Manager. |
@@ -190,26 +192,33 @@ are tuned for a low-cost development environment.
 
 ## Cost
 
-Designed to cost almost nothing at rest. Rough **development** estimate
-(`us-east-1`, one `t3.micro` instance, light use):
+Rough **development** estimate (`us-east-1`, the default `t3.xlarge`, light use).
+The default purchase option is **Spot**, which is ~70% cheaper than On-Demand,
+so the default configuration is the cheapest row below:
 
 | Resource | Basis | Est. monthly (USD) |
 | --- | --- | --- |
-| EC2 (`t3.micro`) | free-tier eligible (750 hrs/mo, year 1); else ~$0.01/hr on-demand | ~$0–8 |
-| Root EBS (30 GiB gp3) | free tier covers 30 GiB (year 1); else $0.08/GiB-month | ~$0–2.40 |
+| EC2 (`t3.xlarge`, **Spot** — the default) | ~$0.05/hr, ~70% off On-Demand | ~$36 (24×7) |
+| ...or On-Demand (needed to schedule stop/start) | ~$0.166/hr | ~$120 (24×7) / ~$70 (scheduled) |
+| Root EBS (30 GiB gp3) | $0.08/GiB-month | ~$2.40 |
 | S3 (artifacts) | a few GiB + requests | <$1 |
 | Lambda | placeholder, near-zero invocations | ~$0 (free tier) |
 | EventBridge | custom bus, low event volume | ~$0 |
 | CloudWatch Logs | low volume, 14-day retention | <$1 |
 | VPC / IGW / SG / routes | no NAT gateway | $0 |
-| **Total** | | **~$0–12 / month** (near $0 on the free tier) |
+| **Total** | | **~$40/mo (Spot default) to ~$125/mo (On-Demand 24×7)** |
 
-`t3.micro` is free-tier eligible, so on a first-year account the compute and its
-volume are effectively free. The single largest *architectural* saving is a
-**public subnet with no NAT gateway**, which avoids ~$32/month per NAT. Stopping
-the instance when it is not needed drops the total further. There are no
-always-on
-managed services in the foundation.
+The instance dominates the bill, and the purchase option dominates the instance.
+The **default one-time Spot** instance is cheapest (~$36/mo) but is *disposable*:
+it terminates on interruption and **cannot be stopped**, so it can't use the
+scheduler. Two other levers each cut cost a different way: the
+[instance scheduler](#instance-scheduler-optional-add-on) needs a *stoppable*
+instance (On-Demand or persistent Spot) and then runs it 18:00–08:00 only
+(~40% off that compute); and **`t3.micro` as a free-tier override** — set
+`InstanceType=t3.micro` and the compute and its volume are effectively free on a
+first-year account. The largest *architectural* saving is a **public subnet with
+no NAT gateway** (~$32/month per
+NAT avoided). There are no always-on managed services in the foundation.
 
 ## Security overview
 
@@ -233,7 +242,7 @@ Full reasoning: the blog's [Security](../docs/blog/provisioning-an-ai-agent-plat
 quota is zero or too low — common on new accounts. Two fixes:
 
 - *Proper fix (keep Spot):* request a Spot quota increase, then redeploy. The
-  quota is measured in vCPUs; a `t3.micro` needs 2.
+  quota is measured in vCPUs; a `t3.xlarge` needs 4 (a `t3.micro`, 2).
 
   ```bash
   aws service-quotas request-service-quota-increase \
@@ -268,6 +277,23 @@ bucket is retained).
   stay globally unique; the IAM stack assumes the naming convention in
   [02-iam.yaml](cloudformation/02-iam.yaml) matches the resources it grants
   access to. Keep `ProjectName` and `Environment` identical across all stacks.
+
+## Instance scheduler (optional add-on)
+
+To cut cost further, an optional scheduler starts the instance each evening and
+stops it each morning, using two Go Lambdas driven by EventBridge Scheduler
+([`07-scheduler.yaml`](cloudformation/07-scheduler.yaml), code in
+[`lambda/`](lambda)):
+
+```bash
+make package                                        # build + upload the Lambdas
+make deploy-scheduler INSTANCE_ID=i-… TIMEZONE=Africa/Johannesburg
+```
+
+The instance must be **stoppable** — an On-Demand instance, or a Spot instance
+launched with `SpotInterruptionBehavior=stop`. Full documentation, including the
+architecture, IAM, timezone and schedule editing, cost model, and troubleshooting,
+is in **[SCHEDULER.md](SCHEDULER.md)**.
 
 ## What comes next
 

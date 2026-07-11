@@ -77,6 +77,21 @@ jobs:
               sys.exit(1)
           print(f"{len(imports)} cross-stack imports all resolve against {len(exports)} exports")
 
+      # The scheduler Lambdas are Go. Vet, test, and cross-compile them for the
+      # Lambda runtime (arm64 Linux) so a broken handler is caught before deploy.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: infra/lambda/go.mod
+          cache-dependency-path: infra/lambda/go.sum
+
+      - name: Test and build scheduler Lambdas
+        working-directory: infra/lambda
+        run: |
+          go vet ./...
+          go test ./...
+          GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o /tmp/start ./cmd/start
+          GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o /tmp/stop ./cmd/stop
+
   # ---------------------------------------------------------------------------
   # Deployment — manual only, gated behind an environment and an explicit
   # confirmation. Assumes an IAM role over OIDC; no static credentials.

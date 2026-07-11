@@ -14,6 +14,14 @@ CFN_DIR     := cloudformation
 # count exceeded" until a Spot quota increase is approved.
 PURCHASE    ?= spot
 
+# Instance scheduler (07-scheduler): the instance to start/stop, its timezone,
+# and where the packaged Go Lambdas live. INSTANCE_ID is required for scheduler
+# targets; the code bucket defaults to the storage stack's artifact bucket.
+INSTANCE_ID   ?=
+TIMEZONE      ?= UTC
+LAMBDA_DIR    := lambda
+LAMBDA_PREFIX := scheduler
+
 # Named IAM roles require this capability acknowledgement.
 CAPS        := CAPABILITY_NAMED_IAM
 PARAMS      := ProjectName=$(PROJECT) Environment=$(ENV)
@@ -38,6 +46,7 @@ STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observabilit
 # GNU Make skips implicit/pattern-rule search for phony targets, so listing
 # `deploy-01-network` etc. here would silently stop the `deploy-%` recipe from
 # ever running — `make deploy` would print "deployment complete" and do nothing.
+.PHONY: lambda-test lambda-vet package deploy-scheduler delete-scheduler
 .PHONY: help lint validate deploy delete outputs bootstrap install-hooks
 
 help: ## Show this help
@@ -107,3 +116,46 @@ outputs: ## Print the outputs of every deployed stack
 			--stack-name $(PROJECT)-$(ENV)-$$s \
 			--query 'Stacks[0].Outputs' --output table 2>/dev/null || echo "  (not deployed)"; \
 	done
+
+# --- Instance scheduler (optional add-on; requires the Go toolchain) --------
+
+lambda-vet: ## Vet the scheduler Lambda module
+	cd $(LAMBDA_DIR) && go vet ./...
+
+lambda-test: ## Test the scheduler Lambda module
+	cd $(LAMBDA_DIR) && go test ./...
+
+# Resolve the artifact bucket from the storage stack, so nothing is hard-coded.
+define artifact_bucket
+$(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-$(ENV)-04-storage \
+	--region $(REGION) --query "Stacks[0].Outputs[?OutputKey=='ArtifactBucketName'].OutputValue" \
+	--output text 2>/dev/null)
+endef
+
+package: ## Build both Go Lambdas (arm64) and upload their zips to the artifact bucket
+	@bucket="$(strip $(call artifact_bucket))"; \
+	[ -n "$$bucket" ] || { echo "artifact bucket not found — deploy 04-storage first"; exit 1; }; \
+	echo "packaging to s3://$$bucket/$(LAMBDA_PREFIX)/"; \
+	for h in start stop; do \
+		echo "  building $$h"; \
+		( cd $(LAMBDA_DIR) && GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o /tmp/aiap-bootstrap ./cmd/$$h ); \
+		( cd /tmp && cp aiap-bootstrap bootstrap && zip -q $$h.zip bootstrap && rm -f bootstrap ); \
+		aws s3 cp /tmp/$$h.zip s3://$$bucket/$(LAMBDA_PREFIX)/$$h.zip --region $(REGION); \
+	done; \
+	echo "packaged"
+
+deploy-scheduler: ## Deploy the instance scheduler (needs INSTANCE_ID=i-...; run `package` first)
+	@[ -n "$(INSTANCE_ID)" ] || { echo "set INSTANCE_ID=i-... (the instance to schedule)"; exit 1; }
+	@bucket="$(strip $(call artifact_bucket))"; \
+	[ -n "$$bucket" ] || { echo "artifact bucket not found — deploy 04-storage first"; exit 1; }; \
+	aws cloudformation deploy \
+		--stack-name $(PROJECT)-$(ENV)-07-scheduler \
+		--template-file $(CFN_DIR)/07-scheduler.yaml \
+		--region $(REGION) --capabilities $(CAPS) \
+		--parameter-overrides $(PARAMS) InstanceId=$(INSTANCE_ID) ScheduleTimezone=$(TIMEZONE) \
+			LambdaCodeBucket=$$bucket StartCodeKey=$(LAMBDA_PREFIX)/start.zip StopCodeKey=$(LAMBDA_PREFIX)/stop.zip \
+		--tags $(TAGS)
+
+delete-scheduler: ## Delete the instance scheduler stack
+	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-07-scheduler
+	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-07-scheduler
