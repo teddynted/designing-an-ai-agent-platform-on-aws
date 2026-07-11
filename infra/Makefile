@@ -47,7 +47,7 @@ STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observabilit
 # `deploy-01-network` etc. here would silently stop the `deploy-%` recipe from
 # ever running — `make deploy` would print "deployment complete" and do nothing.
 .PHONY: lambda-test lambda-vet package deploy-scheduler delete-scheduler
-.PHONY: help lint validate deploy delete outputs bootstrap install-hooks
+.PHONY: help lint validate deploy delete outputs bootstrap install-hooks import-storage
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -108,6 +108,43 @@ delete: ## Delete all stacks in reverse order (retained buckets survive)
 			--stack-name $(PROJECT)-$(ENV)-$$s; \
 	done
 	@echo "teardown complete (the artifact bucket is retained by design)"
+
+# Adopt an orphaned artifact bucket back into a fresh storage stack. Needed when
+# 04-storage was deleted (by teardown or self-healing) while its bucket survived
+# on DeletionPolicy: Retain — a plain `deploy-04-storage` then fails with
+# "bucket ... already exists" because CloudFormation tries to CREATE it anew.
+#
+# CloudFormation import cannot create other resources in the same operation, so
+# this runs in two steps: import the bucket alone (using a bucket-only template
+# derived from 04-storage.yaml with the policy stripped), then a normal deploy of
+# the full template to add the bucket policy back and reconcile any drift.
+import-storage: ## Adopt an orphaned artifact bucket into a new 04-storage stack
+	@stack=$(PROJECT)-$(ENV)-04-storage; \
+	status=$$(aws cloudformation describe-stacks --stack-name $$stack \
+		--region $(REGION) --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE); \
+	[ "$$status" = NONE ] || { echo "$$stack already exists ($$status) — use 'make deploy-04-storage', not import"; exit 1; }; \
+	acct=$$(aws sts get-caller-identity --query Account --output text) || exit 1; \
+	bucket=$(PROJECT)-$(ENV)-artifacts-$$acct-$(REGION); \
+	aws s3api head-bucket --bucket $$bucket 2>/dev/null || { echo "bucket $$bucket does not exist — nothing to import; just 'make deploy-04-storage'"; exit 1; }; \
+	echo "importing s3://$$bucket into $$stack"; \
+	tmpl=$${TMPDIR:-/tmp}/aiap-04-storage-import.yaml; \
+	rti=$${TMPDIR:-/tmp}/aiap-import-bucket.json; \
+	awk '/^  ArtifactBucketPolicy:/{skip=1} /^Outputs:/{skip=0} !skip' $(CFN_DIR)/04-storage.yaml > $$tmpl; \
+	printf '[{"ResourceType":"AWS::S3::Bucket","LogicalResourceId":"ArtifactBucket","ResourceIdentifier":{"BucketName":"%s"}}]' "$$bucket" > $$rti; \
+	aws cloudformation create-change-set --region $(REGION) \
+		--stack-name $$stack --change-set-name aiap-import-artifact-bucket \
+		--change-set-type IMPORT \
+		--resources-to-import file://$$rti \
+		--template-body file://$$tmpl \
+		--parameters ParameterKey=ProjectName,ParameterValue=$(PROJECT) ParameterKey=Environment,ParameterValue=$(ENV) \
+		--capabilities $(CAPS); \
+	aws cloudformation wait change-set-create-complete --region $(REGION) \
+		--stack-name $$stack --change-set-name aiap-import-artifact-bucket; \
+	aws cloudformation execute-change-set --region $(REGION) \
+		--stack-name $$stack --change-set-name aiap-import-artifact-bucket; \
+	aws cloudformation wait stack-import-complete --region $(REGION) --stack-name $$stack; \
+	echo "bucket imported — reconciling full template (adds the bucket policy)"
+	@$(MAKE) deploy-04-storage
 
 outputs: ## Print the outputs of every deployed stack
 	@for s in $(STACKS); do \
