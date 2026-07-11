@@ -19,8 +19,9 @@ milestones build on. It installs **no** application software (OpenClaw, Ollama,
 n8n come later).
 
 > **Educational scope.** This project is built to learn from. The compute
-> defaults to a `t3.xlarge` (~$0.17/hour — see [Cost](#cost)); set
-> `InstanceType=t3.micro` for a **free-tier**, near-zero-cost environment. It
+> defaults to a `t3.xlarge` on **Spot** (~$0.05/hour, ~$36/month; ~$0.17/hour
+> On-Demand — see [Cost](#cost)); set `InstanceType=t3.micro` for a **free-tier**,
+> near-zero-cost environment. It
 > deliberately does not run a large **GPU** instance: later milestones
 > *configure* the agent software (Ollama included) but do not run real model
 > inference, as GPU instances are costly (~$1/hour) and new accounts have zero
@@ -181,7 +182,7 @@ are tuned for a low-cost development environment.
 | `Environment` | `dev` | all | `dev` \| `staging` \| `prod`. |
 | `VpcCidr` | `10.20.0.0/16` | network | Room for future subnets. |
 | `PublicSubnetCidr` | `10.20.1.0/24` | network | The foundation's single subnet. |
-| `InstanceType` | `t3.xlarge` | compute | 4 vCPU/16 GiB, ~$0.17/hr (not free-tier). Set `t3.micro` for a free-tier environment. |
+| `InstanceType` | `t3.xlarge` | compute | 4 vCPU/16 GiB, not free-tier (~$0.05/hr on the default Spot, ~$0.17/hr On-Demand). Set `t3.micro` for a free-tier environment. |
 | `PurchaseOption` | `spot` | compute | `spot` or `on-demand`. Use `on-demand` if the account's Spot quota is zero. |
 | `RootVolumeSize` | `30` | compute | GiB. OS and runtime temp only. |
 | `SshKeyName` | *(empty)* | compute | Empty disables SSH; use SSM Session Manager. |
@@ -191,25 +192,32 @@ are tuned for a low-cost development environment.
 
 ## Cost
 
-Rough **development** estimate (`us-east-1`, the default `t3.xlarge`, light use):
+Rough **development** estimate (`us-east-1`, the default `t3.xlarge`, light use).
+The default purchase option is **Spot**, which is ~70% cheaper than On-Demand,
+so the default configuration is the cheapest row below:
 
 | Resource | Basis | Est. monthly (USD) |
 | --- | --- | --- |
-| EC2 (`t3.xlarge`) | ~$0.166/hr on-demand; not free-tier | ~$120 (24×7) / ~$70 (scheduled) |
+| EC2 (`t3.xlarge`, **Spot** — the default) | ~$0.05/hr, ~70% off On-Demand | ~$36 (24×7) |
+| ...or On-Demand (needed to schedule stop/start) | ~$0.166/hr | ~$120 (24×7) / ~$70 (scheduled) |
 | Root EBS (30 GiB gp3) | $0.08/GiB-month | ~$2.40 |
 | S3 (artifacts) | a few GiB + requests | <$1 |
 | Lambda | placeholder, near-zero invocations | ~$0 (free tier) |
 | EventBridge | custom bus, low event volume | ~$0 |
 | CloudWatch Logs | low volume, 14-day retention | <$1 |
 | VPC / IGW / SG / routes | no NAT gateway | $0 |
-| **Total** | | **~$75–125 / month** |
+| **Total** | | **~$40/mo (Spot default) to ~$125/mo (On-Demand 24×7)** |
 
-The instance dominates the bill. Two levers cut it hard: the
-[instance scheduler](#instance-scheduler-optional-add-on) (run 18:00–08:00 only,
-~40% off the compute), and **`t3.micro` as a free-tier override** — set
+The instance dominates the bill, and the purchase option dominates the instance.
+The **default one-time Spot** instance is cheapest (~$36/mo) but is *disposable*:
+it terminates on interruption and **cannot be stopped**, so it can't use the
+scheduler. Two other levers each cut cost a different way: the
+[instance scheduler](#instance-scheduler-optional-add-on) needs a *stoppable*
+instance (On-Demand or persistent Spot) and then runs it 18:00–08:00 only
+(~40% off that compute); and **`t3.micro` as a free-tier override** — set
 `InstanceType=t3.micro` and the compute and its volume are effectively free on a
-first-year account, dropping the total to a few dollars. The largest
-*architectural* saving is a **public subnet with no NAT gateway** (~$32/month per
+first-year account. The largest *architectural* saving is a **public subnet with
+no NAT gateway** (~$32/month per
 NAT avoided). There are no always-on managed services in the foundation.
 
 ## Security overview
