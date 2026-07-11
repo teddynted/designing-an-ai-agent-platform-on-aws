@@ -141,7 +141,7 @@ Resources:
               - Key: Lifecycle
                 Value: disposable
 
-  PlatformInstance:
+  AIPlatformInstance:
     Type: AWS::EC2::Instance
     Properties:
       LaunchTemplate:
@@ -153,18 +153,18 @@ Resources:
 Outputs:
   InstanceId:
     Description: The EC2 instance ID.
-    Value: !Ref PlatformInstance
+    Value: !Ref AIPlatformInstance
     Export:
       Name: !Sub "${ProjectName}-${Environment}-InstanceId"
 
   InstanceAvailabilityZone:
     Description: The AZ the instance launched in.
-    Value: !GetAtt PlatformInstance.AvailabilityZone
+    Value: !GetAtt AIPlatformInstance.AvailabilityZone
     Export:
       Name: !Sub "${ProjectName}-${Environment}-InstanceAvailabilityZone"
 
   InstancePrivateIp:
     Description: The instance's private IPv4 address.
-    Value: !GetAtt PlatformInstance.PrivateIp
+    Value: !GetAtt AIPlatformInstance.PrivateIp
     Export:
       Name: !Sub "${ProjectName}-${Environment}-InstancePrivateIp"
