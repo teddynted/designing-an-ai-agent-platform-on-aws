@@ -263,6 +263,25 @@ in-progress stacks are left alone). So just fix the cause and re-run
 `make deploy`; use `make delete` only to tear everything down (the artifact
 bucket is retained).
 
+**`bucket … already exists` on the storage stack.** The artifact bucket has
+`DeletionPolicy: Retain`, so it survives when `04-storage` is deleted — by
+`make delete`, a manual delete, or the self-healing above removing a wedged
+storage stack. A later `make deploy` then tries to *create* a bucket whose name
+already exists (the name is deterministic:
+`aiap-dev-artifacts-<account>-<region>`), and fails. Rather than delete the
+bucket and lose its contents, adopt it back into a fresh stack:
+
+```bash
+make import-storage        # imports the existing bucket, then deploys the rest
+```
+
+This runs a CloudFormation `IMPORT` change set against a bucket-only template
+(the bucket policy stripped, since an import cannot create other resources in the
+same step), then deploys the full `04-storage` template to add the policy back
+and reconcile drift. It refuses to run if the stack already exists (use
+`make deploy-04-storage`) or if the bucket does not (nothing to import). Your
+bucket contents are preserved throughout.
+
 ## Validation & limitations
 
 - **Validated** with `cfn-lint` (all six templates pass with no errors or
