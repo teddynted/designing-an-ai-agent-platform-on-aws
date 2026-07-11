@@ -269,6 +269,23 @@ bucket is retained).
   [02-iam.yaml](cloudformation/02-iam.yaml) matches the resources it grants
   access to. Keep `ProjectName` and `Environment` identical across all stacks.
 
+## Instance scheduler (optional add-on)
+
+To cut cost further, an optional scheduler starts the instance each evening and
+stops it each morning, using two Go Lambdas driven by EventBridge Scheduler
+([`07-scheduler.yaml`](cloudformation/07-scheduler.yaml), code in
+[`lambda/`](lambda)):
+
+```bash
+make package                                        # build + upload the Lambdas
+make deploy-scheduler INSTANCE_ID=i-… TIMEZONE=Africa/Johannesburg
+```
+
+The instance must be **stoppable** — an On-Demand instance, or a Spot instance
+launched with `SpotInterruptionBehavior=stop`. Full documentation, including the
+architecture, IAM, timezone and schedule editing, cost model, and troubleshooting,
+is in **[SCHEDULER.md](SCHEDULER.md)**.
+
 ## What comes next
 
 `03-compute` already provisions its instance through a **launch template**, so
