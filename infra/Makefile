@@ -36,7 +36,9 @@ EXTRA_03-compute := PurchaseOption=$(PURCHASE)
 # can only update an existing stack, so a stack stuck in one of these must be
 # deleted before it can be recreated. Nothing durable is lost: the create did
 # not complete, and the S3 bucket is retained independently of its stack.
-WEDGED      := ROLLBACK_COMPLETE ROLLBACK_FAILED CREATE_FAILED DELETE_FAILED
+# REVIEW_IN_PROGRESS is a stack that only ever had a change set created (e.g. a
+# never-executed import) and has no real resources — also cleared by deleting.
+WEDGED      := ROLLBACK_COMPLETE ROLLBACK_FAILED CREATE_FAILED DELETE_FAILED REVIEW_IN_PROGRESS
 
 # Stacks in dependency (deploy) order. Delete runs this list in reverse.
 STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observability
@@ -78,9 +80,17 @@ deploy: $(addprefix deploy-,$(STACKS)) ## Deploy all stacks in dependency order
 # console, e.g. aiap-dev-01-network. $(EXTRA_$*) adds any stack-specific
 # parameter overrides (currently only compute's PurchaseOption).
 #
-# Self-healing: if the stack is wedged in a failed-create state (from an earlier
-# aborted deploy), it is deleted first, since CloudFormation cannot update it.
-# Healthy, absent, and in-progress stacks are left untouched.
+# Self-healing, in two passes before the deploy:
+#  1. A stack wedged in a failed-create state (from an earlier aborted deploy)
+#     is deleted, since CloudFormation cannot update it. Healthy, absent, and
+#     in-progress stacks are left untouched.
+#  2. For 04-storage only: if the stack is absent but its artifact bucket still
+#     exists (retained on DeletionPolicy: Retain after a delete/teardown), the
+#     bucket is imported into a fresh stack first — otherwise the deploy would
+#     try to CREATE a bucket whose deterministic name already exists and fail
+#     with "bucket already exists". Import can't create other resources in the
+#     same step, so it adopts the bucket alone; the deploy that follows adds the
+#     bucket policy back and reconciles drift.
 deploy-%: ## Deploy a single stack, e.g. make deploy-01-network
 	@stack=$(PROJECT)-$(ENV)-$*; \
 	status=$$(aws cloudformation describe-stacks --stack-name $$stack \
@@ -90,8 +100,31 @@ deploy-%: ## Deploy a single stack, e.g. make deploy-01-network
 			echo "$$stack is $$status — deleting before recreate"; \
 			aws cloudformation delete-stack --stack-name $$stack --region $(REGION); \
 			aws cloudformation wait stack-delete-complete --stack-name $$stack --region $(REGION); \
+			status=NONE; \
 			;; \
 	esac; \
+	if [ "$*" = "04-storage" ] && [ "$$status" = NONE ]; then \
+		acct=$$(aws sts get-caller-identity --query Account --output text 2>/dev/null); \
+		bucket=$(PROJECT)-$(ENV)-artifacts-$$acct-$(REGION); \
+		if [ -n "$$acct" ] && aws s3api head-bucket --bucket "$$bucket" 2>/dev/null; then \
+			echo "$$bucket is orphaned (no stack) — importing before deploy"; \
+			tmpl=$${TMPDIR:-/tmp}/aiap-04-storage-import.yaml; \
+			rti=$${TMPDIR:-/tmp}/aiap-import-bucket.json; \
+			awk '/^  ArtifactBucketPolicy:/{skip=1} /^Outputs:/{skip=0} !skip' $(CFN_DIR)/04-storage.yaml > $$tmpl; \
+			printf '[{"ResourceType":"AWS::S3::Bucket","LogicalResourceId":"ArtifactBucket","ResourceIdentifier":{"BucketName":"%s"}}]' "$$bucket" > $$rti; \
+			aws cloudformation create-change-set --region $(REGION) \
+				--stack-name $$stack --change-set-name aiap-import-artifact-bucket \
+				--change-set-type IMPORT --resources-to-import file://$$rti \
+				--template-body file://$$tmpl \
+				--parameters ParameterKey=ProjectName,ParameterValue=$(PROJECT) ParameterKey=Environment,ParameterValue=$(ENV) \
+				--capabilities $(CAPS); \
+			aws cloudformation wait change-set-create-complete --region $(REGION) \
+				--stack-name $$stack --change-set-name aiap-import-artifact-bucket; \
+			aws cloudformation execute-change-set --region $(REGION) \
+				--stack-name $$stack --change-set-name aiap-import-artifact-bucket; \
+			aws cloudformation wait stack-import-complete --region $(REGION) --stack-name $$stack; \
+		fi; \
+	fi; \
 	aws cloudformation deploy \
 		--stack-name $$stack \
 		--template-file $(CFN_DIR)/$*.yaml \
@@ -109,41 +142,12 @@ delete: ## Delete all stacks in reverse order (retained buckets survive)
 	done
 	@echo "teardown complete (the artifact bucket is retained by design)"
 
-# Adopt an orphaned artifact bucket back into a fresh storage stack. Needed when
-# 04-storage was deleted (by teardown or self-healing) while its bucket survived
-# on DeletionPolicy: Retain — a plain `deploy-04-storage` then fails with
-# "bucket ... already exists" because CloudFormation tries to CREATE it anew.
-#
-# CloudFormation import cannot create other resources in the same operation, so
-# this runs in two steps: import the bucket alone (using a bucket-only template
-# derived from 04-storage.yaml with the policy stripped), then a normal deploy of
-# the full template to add the bucket policy back and reconcile any drift.
-import-storage: ## Adopt an orphaned artifact bucket into a new 04-storage stack
-	@stack=$(PROJECT)-$(ENV)-04-storage; \
-	status=$$(aws cloudformation describe-stacks --stack-name $$stack \
-		--region $(REGION) --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE); \
-	[ "$$status" = NONE ] || { echo "$$stack already exists ($$status) — use 'make deploy-04-storage', not import"; exit 1; }; \
-	acct=$$(aws sts get-caller-identity --query Account --output text) || exit 1; \
-	bucket=$(PROJECT)-$(ENV)-artifacts-$$acct-$(REGION); \
-	aws s3api head-bucket --bucket $$bucket 2>/dev/null || { echo "bucket $$bucket does not exist — nothing to import; just 'make deploy-04-storage'"; exit 1; }; \
-	echo "importing s3://$$bucket into $$stack"; \
-	tmpl=$${TMPDIR:-/tmp}/aiap-04-storage-import.yaml; \
-	rti=$${TMPDIR:-/tmp}/aiap-import-bucket.json; \
-	awk '/^  ArtifactBucketPolicy:/{skip=1} /^Outputs:/{skip=0} !skip' $(CFN_DIR)/04-storage.yaml > $$tmpl; \
-	printf '[{"ResourceType":"AWS::S3::Bucket","LogicalResourceId":"ArtifactBucket","ResourceIdentifier":{"BucketName":"%s"}}]' "$$bucket" > $$rti; \
-	aws cloudformation create-change-set --region $(REGION) \
-		--stack-name $$stack --change-set-name aiap-import-artifact-bucket \
-		--change-set-type IMPORT \
-		--resources-to-import file://$$rti \
-		--template-body file://$$tmpl \
-		--parameters ParameterKey=ProjectName,ParameterValue=$(PROJECT) ParameterKey=Environment,ParameterValue=$(ENV) \
-		--capabilities $(CAPS); \
-	aws cloudformation wait change-set-create-complete --region $(REGION) \
-		--stack-name $$stack --change-set-name aiap-import-artifact-bucket; \
-	aws cloudformation execute-change-set --region $(REGION) \
-		--stack-name $$stack --change-set-name aiap-import-artifact-bucket; \
-	aws cloudformation wait stack-import-complete --region $(REGION) --stack-name $$stack; \
-	echo "bucket imported — reconciling full template (adds the bucket policy)"
+# Fix the storage stack alone when its artifact bucket was orphaned (retained on
+# DeletionPolicy: Retain after a delete/teardown, so a fresh deploy hits "bucket
+# already exists"). This is just `deploy-04-storage`, which now detects the
+# orphaned bucket and imports it automatically — so `make deploy` already handles
+# this with no separate step. Kept as a named shortcut for that one stack.
+import-storage: ## Fix the storage stack alone (adopts an orphaned artifact bucket)
 	@$(MAKE) deploy-04-storage
 
 outputs: ## Print the outputs of every deployed stack
