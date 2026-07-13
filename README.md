@@ -1,17 +1,20 @@
 # Designing an AI Agent Platform on AWS
 
-[![Status](https://img.shields.io/badge/status-planning-blue)](#roadmap)
+[![Status](https://img.shields.io/badge/status-building-blue)](#roadmap)
 [![Milestone 1](https://img.shields.io/badge/M1%20Initial%20Architecture-documented-brightgreen)](docs/blog/designing-an-ai-agent-platform-on-aws.md)
-[![Next milestone](https://img.shields.io/badge/next-M2%20CloudFormation-lightgrey)](#milestone-2--cloudformation-infrastructure)
+[![Milestone 2](https://img.shields.io/badge/M2%20CloudFormation-shipped-brightgreen)](docs/blog/provisioning-an-ai-agent-platform-with-cloudformation.md)
+[![Milestone 3](https://img.shields.io/badge/M3%20EC2%20Spot-shipped-brightgreen)](docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md)
+[![Next milestone](https://img.shields.io/badge/next-M4%20Custom%20AMIs-lightgrey)](#milestone-4--custom-amis)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
-> **Status: planning.**
-> This repository is in its planning phase. Apart from the repository's own
-> release tooling, **nothing described below has been built yet.** Every
-> milestone, component, and integration on this page is a statement of intent,
-> not of fact. Implementation begins with
-> [Milestone 1 — Initial Architecture](#milestone-1--initial-architecture).
+> **Status: building.**
+> The foundation is real: the AWS infrastructure is
+> [CloudFormation you can deploy](infra/), and it runs its compute on
+> [EC2 Spot with interruption handling](infra/SPOT.md). Everything from
+> [Milestone 4](#milestone-4--custom-amis) on is still a statement of intent —
+> no application software (OpenClaw, Ollama, n8n) is installed yet. See
+> [What exists today](#what-exists-today), which is kept honest.
 
 An open design study and reference implementation for running **autonomous AI
 agents on AWS**: how to host them, how to feed them models, how to let them act
@@ -27,6 +30,7 @@ on a repository, and how to keep the bill and the blast radius small.
 - [What exists today](#what-exists-today)
 - [Key Features (Planned)](#key-features-planned)
 - [High-Level Architecture Overview](#high-level-architecture-overview)
+- [Cost optimization with EC2 Spot](#cost-optimization-with-ec2-spot)
 - [Technology Stack](#technology-stack)
 - [Repository Scope](#repository-scope)
 - [Related Repositories](#related-repositories)
@@ -91,17 +95,26 @@ Being explicit, because everything else on this page is aspirational:
 | Component | Status | Notes |
 | --- | --- | --- |
 | Release management tooling | ✅ **Implemented** | A Go CLI and workflows that version, tag, and publish this repository. See [RELEASE_MANAGEMENT.md](RELEASE_MANAGEMENT.md) |
-| Platform architecture | 📝 **Documented** | [Milestone 1](#milestone-1--initial-architecture) is complete: the [architecture blog post](docs/blog/designing-an-ai-agent-platform-on-aws.md) and [diagrams](docs/architecture/diagrams.md). Design only — nothing deployed |
-| AWS infrastructure | 📋 Planned | [Milestone 2](#milestone-2--cloudformation-infrastructure) onwards |
-| Every integration below | 📋 Planned | Nothing is deployed |
+| Platform architecture | 📝 **Documented** | [Milestone 1](#milestone-1--initial-architecture): the [architecture blog post](docs/blog/designing-an-ai-agent-platform-on-aws.md) and [diagrams](docs/architecture/diagrams.md) |
+| AWS infrastructure | ✅ **Implemented** | [Milestone 2](#milestone-2--cloudformation-infrastructure): VPC, IAM, EC2, S3, EventBridge, CloudWatch — eight CloudFormation stacks, deployed by CI. See [infra/](infra/) |
+| EC2 Spot + interruption handling | ✅ **Implemented** | [Milestone 3](#milestone-3--ec2-spot-instances): a drain agent on the instance, EventBridge rules and Go Lambdas in the account. See [infra/SPOT.md](infra/SPOT.md) |
+| Application software (OpenClaw, Ollama, n8n) | 📋 Planned | Nothing is installed on the instance yet — [Milestone 5](#milestone-5--self-hosted-n8n-integration) onwards |
+| Every integration below | 📋 Planned | Not built |
 
-No CloudFormation template, deployment script, or application component exists in
-this repository yet.
+The infrastructure is real and deployable. **No AI agent runs on it yet**: the
+compute is provisioned, empty, and waiting for the workload milestones. And no
+real model inference happens anywhere in this repository — the compute
+deliberately stays off GPU instances, for cost and quota reasons explained in
+[infra/README.md](infra/README.md).
 
 ## Key Features (Planned)
 
-None of the following are built. They describe what the platform is intended to
-do once the roadmap is complete.
+These describe what the platform is intended to do once the roadmap is complete.
+Only the infrastructure beneath them exists today — see
+[What exists today](#what-exists-today). The one exception is the Spot half of
+"Spot-first inference": the compute *does* run on Spot, with interruptions
+handled ([Milestone 3](#cost-optimization-with-ec2-spot)). The GPU and the
+managed backstop are still ahead.
 
 - **Three-plane architecture** — a serverless control plane, a stateful agent
   plane, and a stateless inference plane, each sized and priced independently.
@@ -196,8 +209,178 @@ scalability models — is documented in the Milestone 1 deliverables:
 - 🗺️ **[AWS architecture diagram](docs/architecture/aws-architecture.svg)** — the AWS service view above (Cloud / Region / VPC / subnets)
 - 📐 **[Architecture diagrams](docs/architecture/diagrams.md)** — the service view plus four Mermaid flow views (high-level, event flow, component interaction, deployment boundaries)
 
-These are design documents. **No infrastructure is deployed**; Milestone 1 is
-architecture only.
+These are design documents from Milestone 1. What is actually deployed today is
+the foundation described in [What exists today](#what-exists-today) — a narrower
+thing than the diagram above, and the diagram is the target it is being built
+towards.
+
+## Cost optimization with EC2 Spot
+
+**Milestone 3.** The platform's compute runs on **EC2 Spot** — the same hardware,
+the same network, the same AMI as On-Demand, at roughly **70% off** — and it
+survives the interruptions that discount pays for.
+
+> 📄 [Reducing AI Infrastructure Costs with EC2 Spot Instances](docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md) — the blog post ·
+> 📐 [Spot diagrams](docs/architecture/spot-diagrams.md) ·
+> 🛠️ [SPOT.md](infra/SPOT.md) — the operational reference
+
+### The idea
+
+You are renting capacity AWS has already built and cannot currently sell, on the
+condition that it can have it back with about **two minutes' notice**. The
+discount is the price of that condition. AI workloads are unusually good at
+paying it: a batch of embeddings, a repository index, or a drafted blog post can
+be interrupted and redone, and nobody notices.
+
+The saving is the entire argument, and it scales with the instance:
+
+| Instance | On-Demand 24×7 | Spot 24×7 | Saved |
+| --- | --- | --- | --- |
+| `t3.xlarge` (this platform's default) | ~$120/mo | ~$36/mo | ~$84/mo |
+| `g5.xlarge` (GPU inference) | ~$730/mo | ~$220/mo | **~$510/mo** |
+| `g5.12xlarge` (larger models) | ~$4,100/mo | ~$1,250/mo | **~$2,850/mo** |
+
+*(Illustrative; Spot prices move and vary by region and AZ.)*
+
+### The one thing to understand
+
+**A Lambda cannot save your work.** By the time EventBridge has delivered the
+interruption event and Lambda has cold-started, much of the window is gone — and
+a function in the account cannot reach into the instance and flush a half-written
+file to disk anyway.
+
+So interruption handling is **two cooperating halves**, and neither is sufficient
+alone:
+
+| | Runs | Sees the notice via | Job |
+| --- | --- | --- | --- |
+| **Drain agent** | on the instance | instance metadata (IMDS) | Stop the workload. Save its output to S3. |
+| **Lambda handlers** | in the account | EventBridge | Count it. Log it. Tell the rest of the platform. |
+
+The drain agent makes Spot *safe*. The Lambdas make it *observable*.
+
+### Architecture
+
+```mermaid
+flowchart TB
+    reclaim["AWS reclaims the capacity"]
+
+    subgraph instance["On the instance — saves the work"]
+        imds["Instance metadata<br/>spot/instance-action"]
+        drain["spot-drain<br/>(systemd, polls every 5s)"]
+        work["Workload"]
+    end
+
+    subgraph account["In the account — tells the platform"]
+        default["Default event bus"]
+        rules["5 EventBridge rules"]
+        l1["Lambda · spot-interruption"]
+        l2["Lambda · spot-statechange"]
+        bus["Platform event bus"]
+    end
+
+    s3["S3 artifact bucket<br/>durable"]
+    cw["CloudWatch<br/>logs + metrics"]
+
+    reclaim -->|"~2 min notice"| imds
+    reclaim -->|"event"| default
+    imds --> drain
+    drain -->|"1 · stop"| work
+    drain -->|"2 · save"| s3
+    default --> rules --> l1 & l2
+    l1 & l2 -->|"re-publish"| bus
+    l1 & l2 -.-> cw
+    drain -.-> cw
+
+    classDef aws fill:#FF9900,stroke:#232F3E,color:#232F3E
+    classDef store fill:#3F8624,stroke:#243B0B,color:#FFFFFF
+    class default,rules,l1,l2,bus,drain,work aws
+    class s3,cw,imds store
+```
+
+### The interruption workflow
+
+1. AWS decides to reclaim the instance and writes a notice to its metadata
+   service. The clock starts: **~120 seconds.**
+2. The **drain agent** (polling every 5s) sees it, stops the workload's systemd
+   units, syncs `/var/lib/<project>/artifacts` to S3, and leaves a marker so a
+   post-mortem can tell a clean drain from a crash. It exits, and stays exited.
+3. In parallel, EventBridge delivers the same fact to the **interruption
+   Lambda**, which checks the instance is this platform's (by tag — EC2's events
+   carry none), counts it in CloudWatch, and re-publishes it on the platform bus.
+4. The instance is terminated. **The work survives it.**
+
+### Event flow
+
+Five rules, on the account's **default** bus — the only bus AWS services publish
+to. (A rule matching `source: aws.ec2` on a custom bus is valid, deploys cleanly,
+and never fires. That one is a rite of passage.)
+
+| Event | Meaning | Handler | Metric |
+| --- | --- | --- | --- |
+| `EC2 Spot Instance Interruption Warning` | ~2 minutes left | `spot-interruption` | `InterruptionWarnings` |
+| `EC2 Instance Rebalance Recommendation` | Elevated risk (advisory) | `spot-interruption` | `RebalanceRecommendations` |
+| State-change → `running` | Launched | `spot-statechange` | `InstancesLaunched` |
+| State-change → `stopped` | Stopped | `spot-statechange` | `InstancesStopped` |
+| State-change → `terminated` | Destroyed | `spot-statechange` | `InstancesTerminated` |
+
+Metrics are dimensioned by **instance type**, because "how often is this
+interrupted?" is a question about a type in an AZ — and it is the number that
+decides whether a workload belongs on Spot at all.
+
+### Deploy it
+
+```bash
+cd infra
+
+make deploy                                 # the six core stacks (AWS CLI only)
+make spot                                   # build the Go handlers + deploy 08-spot
+make simulate-interruption INSTANCE_ID=i-…  # rehearse an interruption
+make outputs                                # what got created
+```
+
+Full deployment, parameters, IAM, metrics, cleanup, and troubleshooting:
+**[infra/SPOT.md](infra/SPOT.md)**.
+
+### When *not* to use Spot
+
+The part most write-ups skip. Spot is wrong for anything holding state you cannot
+rebuild (n8n, a database, the control plane), long jobs that cannot checkpoint,
+latency-critical serving with no fallback, and anything that cannot shut down
+cleanly in two minutes.
+
+The pattern this platform follows: **the plane that does the work goes on Spot;
+the plane that remembers the work does not.**
+
+### Screenshots
+
+<!-- Replace these placeholders with real console captures from a live deploy. -->
+
+| | |
+| --- | --- |
+| _CloudWatch: `InterruptionWarnings` by instance type_ | `docs/architecture/screenshots/spot-metrics.png` *(placeholder)* |
+| _CloudWatch Logs: an interruption handled end to end_ | `docs/architecture/screenshots/spot-interruption-log.png` *(placeholder)* |
+| _EventBridge: the five rules on the default bus_ | `docs/architecture/screenshots/spot-rules.png` *(placeholder)* |
+| _S3: `drain/<instance-id>/` after an interruption_ | `docs/architecture/screenshots/spot-drain-artifacts.png` *(placeholder)* |
+
+### Future improvements
+
+Deliberately **not** built in this milestone, and each is its own piece of work:
+
+- **An Auto Scaling group with a mixed-instances policy** — the single biggest
+  win available. Diversifying across instance types and AZs with the
+  `capacity-optimized` allocation strategy is what turns "the instance was
+  interrupted" into "a replacement is already running". The compute stack already
+  provisions through a **launch template** specifically so this needs no
+  re-architecture. *(Milestone 19.)*
+- **A baked AMI** to shrink the cold start an interruption costs. *(Milestone 4.)*
+- **Checkpointing** in the workloads themselves, so an interrupted job resumes
+  rather than restarts.
+- **Alarms on the interruption rate**, not just metrics — and a dashboard.
+  *(Milestone 15.)*
+- **A managed fallback** so interactive inference can survive an interruption
+  by failing over to Bedrock. *(Milestone 10.)*
+- **Spot placement scores** to pick the least contended AZ before launching.
 
 ## Technology Stack
 
@@ -352,24 +535,41 @@ flowchart TB
 
 #### Milestone 2 — CloudFormation Infrastructure
 
+✅ **Shipped.**
+[Blog post](docs/blog/provisioning-an-ai-agent-platform-with-cloudformation.md) ·
+[Infrastructure](infra/) ·
+[Diagrams](docs/architecture/infrastructure-diagrams.md)
+
 - **Objective** — Express the shared AWS estate as code: networking, IAM, and
   shared storage.
 - **Primary focus** — Stack decomposition, cross-stack exports, and what belongs
   to the platform rather than to a component.
-- **Related technologies** — AWS CloudFormation, VPC, IAM, EFS.
-- **Expected outcome** — A reproducible, teardownable baseline environment that
-  component repositories can build on.
+- **Related technologies** — AWS CloudFormation, VPC, IAM, EC2, S3, EventBridge,
+  CloudWatch.
+- **Outcome** — A reproducible, teardownable baseline environment, deployed by
+  CI over OIDC with no long-lived credentials.
 
 #### Milestone 3 — EC2 Spot Instances
 
+✅ **Shipped.**
+[Blog post](docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md) ·
+[SPOT.md](infra/SPOT.md) ·
+[Diagrams](docs/architecture/spot-diagrams.md) ·
+[Overview](#cost-optimization-with-ec2-spot)
+
 - **Objective** — Run interruption-tolerant capacity on Spot without making the
   platform unreliable.
-- **Primary focus** — Interruption handling, capacity-optimised allocation, and
-  which planes may and may not use Spot.
-- **Related technologies** — EC2 Spot, Auto Scaling groups, instance rebalance
-  recommendations.
-- **Expected outcome** — A Spot fleet whose interruptions are visible, absorbed,
-  and cheap.
+- **Primary focus** — Interruption handling as **two halves**: a drain agent on
+  the instance (which is the only thing that can save in-flight work), and
+  event-driven handlers in the account (which are the only things that can see
+  the fleet). Plus: which planes may and may not use Spot.
+- **Related technologies** — EC2 Spot, EventBridge, Lambda (Go), IAM, CloudWatch,
+  instance rebalance recommendations, IMDS.
+- **Outcome** — Compute at ~70% off, whose interruptions are visible (metrics per
+  instance type), absorbed (work drained to S3 inside the two-minute window), and
+  cheap. Capacity-optimised allocation across a *fleet* needs an Auto Scaling
+  group and is deliberately deferred to Milestone 19; the launch template this
+  milestone builds on is what makes that a drop-in change.
 
 #### Milestone 4 — Custom AMIs
 
@@ -569,10 +769,12 @@ built, or out of order, as a set of independent AWS design studies.
 
 ### Posts
 
-| # | Post | Status |
-| --- | --- | --- |
-| 1 | [Designing an AI Agent Platform on AWS](docs/blog/designing-an-ai-agent-platform-on-aws.md) | ✅ Published |
-| 2+ | One per milestone, as each is built | 📋 Planned |
+| # | Post | Milestone | Status |
+| --- | --- | --- | --- |
+| 1 | [Designing an AI Agent Platform on AWS](docs/blog/designing-an-ai-agent-platform-on-aws.md) | M1 | ✅ Published |
+| 2 | [Provisioning an AI Agent Platform with CloudFormation](docs/blog/provisioning-an-ai-agent-platform-with-cloudformation.md) | M2 | ✅ Published |
+| 3 | [Reducing AI Infrastructure Costs with EC2 Spot Instances](docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md) | M3 | ✅ Published |
+| 4+ | One per milestone, as each is built | M4+ | 📋 Planned |
 
 ## Future Enhancements
 
@@ -1124,12 +1326,13 @@ docs/                   Architecture and per-package responsibilities
 
 ## Contributing
 
-Contributions are welcome once implementation begins.
+Contributions are welcome.
 
-While the project is in its planning phase, the most useful contribution is a
-**challenge to the plan**: an assumption that will not hold, a milestone in the
-wrong order, a cost model that will not survive contact with a bill. Please open
-an issue.
+The infrastructure milestones are built, so there is now code to review as well
+as a plan to argue with. Both are useful: a bug in the
+[templates or handlers](infra/), or a **challenge to the plan** — an assumption
+that will not hold, a milestone in the wrong order, a cost model that will not
+survive contact with a bill. Please open an issue.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) currently documents the workflow for the
 repository's release tooling — commit conventions, tests, and how a change

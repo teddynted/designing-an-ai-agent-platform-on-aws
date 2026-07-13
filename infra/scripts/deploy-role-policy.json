@@ -89,6 +89,20 @@
       "Resource": "arn:aws:s3:::__PROJECT__-*"
     },
     {
+      "Sid": "LambdaArtifactObjects",
+      "Comment": "`make package` uploads the packaged Go Lambda zips to the artifact bucket, and CloudFormation reads them back from it when it creates the functions.",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::__PROJECT__-*/*"
+    },
+    {
+      "Sid": "SpotInterruptionMetrics",
+      "Comment": "The Spot handlers publish their own metrics at runtime under their own role; the deploy role only needs to read them back, e.g. to confirm a deployment works.",
+      "Effect": "Allow",
+      "Action": ["cloudwatch:GetMetricStatistics", "cloudwatch:ListMetrics"],
+      "Resource": "*"
+    },
+    {
       "Sid": "EventBus",
       "Effect": "Allow",
       "Action": [

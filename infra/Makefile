@@ -20,12 +20,20 @@ PURCHASE    ?= spot
 INSTANCE_ID   ?=
 TIMEZONE      ?= UTC
 LAMBDA_DIR    := lambda
-LAMBDA_PREFIX := scheduler
+
+# The Go Lambdas, grouped by the stack that deploys them and the S3 key prefix
+# their zips are uploaded under. Both groups are built by `package`.
+SCHED_FUNCS   := start stop
+SCHED_PREFIX  := scheduler
+SPOT_FUNCS    := interruption statechange
+SPOT_PREFIX   := spot
 
 # Named IAM roles require this capability acknowledgement.
 CAPS        := CAPABILITY_NAMED_IAM
 PARAMS      := ProjectName=$(PROJECT) Environment=$(ENV)
 TAGS        := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=2
+# Spot interruption handling is Milestone 3, so its resources are tagged as such.
+SPOT_TAGS   := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=3
 
 # Per-stack extra parameter overrides. Only the compute stack declares
 # PurchaseOption, so it must be passed to that stack alone — passing it to a
@@ -49,11 +57,12 @@ STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observabilit
 # `deploy-01-network` etc. here would silently stop the `deploy-%` recipe from
 # ever running — `make deploy` would print "deployment complete" and do nothing.
 .PHONY: lambda-test lambda-vet package deploy-scheduler delete-scheduler
+.PHONY: spot deploy-spot delete-spot simulate-interruption
 .PHONY: help lint validate deploy delete outputs bootstrap install-hooks import-storage
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 
 bootstrap: ## One-time (admin): create the GitHub Actions OIDC provider + deploy role
 	PROJECT=$(PROJECT) REGION=$(REGION) scripts/bootstrap-github-oidc.sh
@@ -150,20 +159,27 @@ delete: ## Delete all stacks in reverse order (retained buckets survive)
 import-storage: ## Fix the storage stack alone (adopts an orphaned artifact bucket)
 	@$(MAKE) deploy-04-storage
 
+# The add-on stacks are listed too. They are not in STACKS (they are not part of
+# `make deploy`), but a stack you deployed is a stack you want the outputs of.
+# Undeployed ones simply print "(not deployed)".
 outputs: ## Print the outputs of every deployed stack
-	@for s in $(STACKS); do \
+	@for s in $(STACKS) 07-scheduler 08-spot; do \
 		echo "== $(PROJECT)-$(ENV)-$$s =="; \
 		aws cloudformation describe-stacks --region $(REGION) \
 			--stack-name $(PROJECT)-$(ENV)-$$s \
 			--query 'Stacks[0].Outputs' --output table 2>/dev/null || echo "  (not deployed)"; \
 	done
 
-# --- Instance scheduler (optional add-on; requires the Go toolchain) --------
+# --- Go Lambdas (optional add-ons; require the Go toolchain) ----------------
+#
+# The core `deploy` above needs nothing but the AWS CLI. The scheduler (07) and
+# the Spot interruption handlers (08) are deployed separately because they need
+# Go to build and an artifact bucket to upload to.
 
-lambda-vet: ## Vet the scheduler Lambda module
+lambda-vet: ## Vet the Lambda module
 	cd $(LAMBDA_DIR) && go vet ./...
 
-lambda-test: ## Test the scheduler Lambda module
+lambda-test: ## Test the Lambda module
 	cd $(LAMBDA_DIR) && go test ./...
 
 # Resolve the artifact bucket from the storage stack, so nothing is hard-coded.
@@ -173,16 +189,19 @@ $(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-$(ENV)-04-sto
 	--output text 2>/dev/null)
 endef
 
-package: ## Build both Go Lambdas (arm64) and upload their zips to the artifact bucket
+package: ## Build all four Go Lambdas (arm64) and upload their zips to the artifact bucket
 	@bucket="$(strip $(call artifact_bucket))"; \
 	[ -n "$$bucket" ] || { echo "artifact bucket not found — deploy 04-storage first"; exit 1; }; \
-	echo "packaging to s3://$$bucket/$(LAMBDA_PREFIX)/"; \
-	for h in start stop; do \
-		echo "  building $$h"; \
-		( cd $(LAMBDA_DIR) && GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o /tmp/aiap-bootstrap ./cmd/$$h ); \
-		( cd /tmp && cp aiap-bootstrap bootstrap && zip -q $$h.zip bootstrap && rm -f bootstrap ); \
-		aws s3 cp /tmp/$$h.zip s3://$$bucket/$(LAMBDA_PREFIX)/$$h.zip --region $(REGION); \
-	done; \
+	build_upload() { \
+		prefix="$$1"; fn="$$2"; \
+		echo "  building $$fn"; \
+		( cd $(LAMBDA_DIR) && GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o /tmp/aiap-bootstrap ./cmd/$$fn ); \
+		( cd /tmp && cp aiap-bootstrap bootstrap && zip -q $$fn.zip bootstrap && rm -f bootstrap ); \
+		aws s3 cp /tmp/$$fn.zip s3://$$bucket/$$prefix/$$fn.zip --region $(REGION); \
+	}; \
+	echo "packaging to s3://$$bucket/"; \
+	for f in $(SCHED_FUNCS); do build_upload $(SCHED_PREFIX) $$f || exit 1; done; \
+	for f in $(SPOT_FUNCS);  do build_upload $(SPOT_PREFIX)  $$f || exit 1; done; \
 	echo "packaged"
 
 deploy-scheduler: ## Deploy the instance scheduler (needs INSTANCE_ID=i-...; run `package` first)
@@ -194,9 +213,45 @@ deploy-scheduler: ## Deploy the instance scheduler (needs INSTANCE_ID=i-...; run
 		--template-file $(CFN_DIR)/07-scheduler.yaml \
 		--region $(REGION) --capabilities $(CAPS) \
 		--parameter-overrides $(PARAMS) InstanceId=$(INSTANCE_ID) ScheduleTimezone=$(TIMEZONE) \
-			LambdaCodeBucket=$$bucket StartCodeKey=$(LAMBDA_PREFIX)/start.zip StopCodeKey=$(LAMBDA_PREFIX)/stop.zip \
+			LambdaCodeBucket=$$bucket StartCodeKey=$(SCHED_PREFIX)/start.zip StopCodeKey=$(SCHED_PREFIX)/stop.zip \
 		--tags $(TAGS)
 
 delete-scheduler: ## Delete the instance scheduler stack
 	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-07-scheduler
 	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-07-scheduler
+
+# --- Spot interruption handling (Milestone 3) -------------------------------
+
+spot: package deploy-spot ## Build the handlers and deploy Spot interruption handling
+
+deploy-spot: ## Deploy Spot interruption handling (run `package` first, or use `make spot`)
+	@bucket="$(strip $(call artifact_bucket))"; \
+	[ -n "$$bucket" ] || { echo "artifact bucket not found — deploy 04-storage first"; exit 1; }; \
+	aws cloudformation deploy \
+		--stack-name $(PROJECT)-$(ENV)-08-spot \
+		--template-file $(CFN_DIR)/08-spot.yaml \
+		--region $(REGION) --capabilities $(CAPS) \
+		--parameter-overrides $(PARAMS) LambdaCodeBucket=$$bucket \
+			InterruptionCodeKey=$(SPOT_PREFIX)/interruption.zip \
+			StateChangeCodeKey=$(SPOT_PREFIX)/statechange.zip \
+		--tags $(SPOT_TAGS)
+
+delete-spot: ## Delete the Spot interruption handling stack
+	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-08-spot
+	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-08-spot
+
+# Rehearse an interruption without waiting for AWS to take the instance away.
+#
+# This invokes the handler with the exact payload EventBridge would deliver, so
+# it exercises the handler, its IAM policy, the metric, and the platform event —
+# everything except EventBridge's own delivery. It cannot make EC2 emit a real
+# aws.ec2 event: AWS reserves the "aws." source prefix, so PutEvents will not
+# accept one. A true end-to-end interruption needs AWS Fault Injection Service
+# (see SPOT.md), or patience.
+simulate-interruption: ## Invoke the interruption handler with a sample event (INSTANCE_ID=i-...)
+	@[ -n "$(INSTANCE_ID)" ] || { echo "set INSTANCE_ID=i-... (the instance to simulate an interruption for)"; exit 1; }
+	@printf '{"version":"0","detail-type":"EC2 Spot Instance Interruption Warning","source":"aws.ec2","time":"%s","detail":{"instance-id":"%s","instance-action":"terminate"}}' \
+		"$$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(INSTANCE_ID)" > /tmp/aiap-interruption.json
+	@aws lambda invoke --region $(REGION) \
+		--function-name $(PROJECT)-$(ENV)-spot-interruption \
+		--payload fileb:///tmp/aiap-interruption.json /dev/stdout

@@ -1,0 +1,407 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  AI Agent Platform — Spot interruption handling (Milestone 3).
+  Makes the compute stack's Spot instance safe to run: EventBridge rules catch
+  the EC2 lifecycle events AWS emits when it reclaims, rebalances, or changes the
+  state of an instance, and route them to two Go Lambdas that count them, log
+  them, and re-publish them onto the platform's own event bus for later
+  milestones to act on.
+  Note: this is the *account-side* half of interruption handling. The instance
+  cannot be drained from here — two minutes is not enough time to coordinate a
+  shutdown remotely — so the graceful shutdown itself runs on the instance, in
+  the drain agent that 03-compute installs. Both halves are needed; neither is
+  sufficient alone.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aiap
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Lower-case project prefix. Must match the other stacks.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment. Must match the other stacks.
+
+  LambdaCodeBucket:
+    Type: String
+    Description: >-
+      S3 bucket holding the packaged Lambda zips. Populated by
+      `make -C infra package`; defaults to the storage stack's artifact bucket.
+
+  InterruptionCodeKey:
+    Type: String
+    Default: spot/interruption.zip
+    Description: S3 key of the interruption handler's zip.
+
+  StateChangeCodeKey:
+    Type: String
+    Default: spot/statechange.zip
+    Description: S3 key of the state-change handler's zip.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
+    Description: Retention for the Lambda log groups, in days.
+
+  LambdaTimeoutSeconds:
+    Type: Number
+    Default: 30
+    MinValue: 10
+    MaxValue: 120
+    Description: >-
+      Lambda timeout. The handlers make three fast API calls, but an interruption
+      is exactly when EC2 and CloudWatch are most likely to throttle, so the
+      SDK's retries need headroom.
+
+  RebalanceRuleState:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: >-
+      Whether to act on rebalance recommendations — the advisory signal that an
+      instance is at elevated risk of interruption, which arrives before the
+      two-minute warning. Disable it if the extra events are noise for a
+      single-instance environment.
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # IAM — one role for both handlers. Every statement is scoped; the two that
+  # cannot be scoped by resource are scoped by condition or justified below.
+  # ---------------------------------------------------------------------------
+  SpotLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-spot-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: read-instances
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # The events carry an instance ID but no tags, so the handler must
+              # look the instance up to decide whether it is this platform's.
+              # DescribeInstances does not support resource-level permissions, so
+              # "*" is the only expressible resource. It is read-only, and it is
+              # the sole EC2 permission these functions hold: they can look, and
+              # they cannot touch. Nothing here can stop, start, or terminate an
+              # instance.
+              - Sid: DescribeInstancesForOwnershipCheck
+                Effect: Allow
+                Action: ec2:DescribeInstances
+                Resource: "*"
+        - PolicyName: publish-platform-events
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Scoped to the platform's own bus. The handlers can publish the
+              # platform's events and no others — they cannot, for instance, put
+              # events on the default bus and impersonate an AWS service.
+              - Sid: PutPlatformEvents
+                Effect: Allow
+                Action: events:PutEvents
+                Resource:
+                  Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EventBusArn"
+        - PolicyName: publish-metrics
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # PutMetricData takes no resource ARN at all — it is always "*".
+              # The condition key is the only way to scope it, and it is a real
+              # scope: this role can write metrics into this project's namespace
+              # and nowhere else, so it cannot pollute (or overwrite) another
+              # team's dashboards.
+              - Sid: PutSpotMetrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: !Sub "${ProjectName}/spot"
+        - PolicyName: logging
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Scoped to these two functions' log groups, which the stack
+              # declares below — so the names are known, not guessed.
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-spot-*:*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-spot-lambda-role"
+
+  # ---------------------------------------------------------------------------
+  # Log groups — declared explicitly, so retention is controlled and the names
+  # are predictable enough for the IAM policy above to scope to them.
+  # ---------------------------------------------------------------------------
+  InterruptionFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-spot-interruption"
+      RetentionInDays: !Ref LogRetentionDays
+
+  StateChangeFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-spot-statechange"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------------------------------------------------------------------------
+  # Functions — two of them, deliberately. The interruption path is the one that
+  # matters during an incident; keeping it in its own function means its log
+  # group, its errors, its retries, and its concurrency are not tangled up with
+  # the routine state-change traffic, which is far higher volume.
+  # ---------------------------------------------------------------------------
+  InterruptionFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: InterruptionFunctionLogGroup
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-spot-interruption"
+      Description: Handles Spot interruption warnings and rebalance recommendations.
+      Runtime: provided.al2023
+      Architectures: [arm64]
+      Handler: bootstrap
+      Timeout: !Ref LambdaTimeoutSeconds
+      MemorySize: 128
+      Role: !GetAtt SpotLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref InterruptionCodeKey
+      Environment:
+        Variables:
+          PROJECT_NAME: !Ref ProjectName
+          ENVIRONMENT: !Ref Environment
+          EVENT_BUS_NAME:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EventBusName"
+          # Must match the source the platform bus's rule filters on (05-events),
+          # or the re-published event lands on a bus where nothing is listening.
+          EVENT_SOURCE: !Sub "${ProjectName}.${Environment}.platform"
+          METRIC_NAMESPACE: !Sub "${ProjectName}/spot"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-spot-interruption"
+
+  StateChangeFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: StateChangeFunctionLogGroup
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-spot-statechange"
+      Description: Handles EC2 instance launched / stopped / terminated events.
+      Runtime: provided.al2023
+      Architectures: [arm64]
+      Handler: bootstrap
+      Timeout: !Ref LambdaTimeoutSeconds
+      MemorySize: 128
+      Role: !GetAtt SpotLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref StateChangeCodeKey
+      Environment:
+        Variables:
+          PROJECT_NAME: !Ref ProjectName
+          ENVIRONMENT: !Ref Environment
+          EVENT_BUS_NAME:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EventBusName"
+          EVENT_SOURCE: !Sub "${ProjectName}.${Environment}.platform"
+          METRIC_NAMESPACE: !Sub "${ProjectName}/spot"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-spot-statechange"
+
+  # ---------------------------------------------------------------------------
+  # EventBridge rules.
+  #
+  # These rules live on the account's DEFAULT event bus, not on the platform bus
+  # created by 05-events. That is not an oversight: AWS services publish their
+  # events to the default bus, and there is no way to make EC2 publish to a
+  # custom one. A rule on the platform bus matching source "aws.ec2" would be
+  # valid, deploy cleanly, and never fire — a mistake that looks exactly like
+  # working code.
+  #
+  # The consequence is that these rules match EVERY instance in the region, not
+  # just this platform's, because EC2's events carry no tags to filter on. The
+  # handlers therefore resolve the instance and check its tags before acting. See
+  # the ownership check in internal/spot.
+  # ---------------------------------------------------------------------------
+
+  # 1. The two-minute warning. This is the event the whole milestone exists for:
+  #    AWS has decided to reclaim the instance, and everything on it has about
+  #    120 seconds left.
+  InterruptionWarningRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-spot-interruption-warning"
+      Description: EC2 is about to reclaim a Spot instance (~2 minutes' notice).
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.ec2
+        detail-type:
+          - EC2 Spot Instance Interruption Warning
+      Targets:
+        - Id: interruption-function
+          Arn: !GetAtt InterruptionFunction.Arn
+
+  # 2. The earlier, softer signal: this instance is at elevated risk of being
+  #    interrupted. Nothing is being reclaimed yet. A fleet uses it to shift work
+  #    off the instance before the hard deadline arrives; a single instance uses
+  #    it as an early warning.
+  RebalanceRecommendationRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-spot-rebalance"
+      Description: EC2 recommends rebalancing away from a Spot instance (advisory).
+      State: !Ref RebalanceRuleState
+      EventPattern:
+        source:
+          - aws.ec2
+        detail-type:
+          - EC2 Instance Rebalance Recommendation
+      Targets:
+        - Id: interruption-function
+          Arn: !GetAtt InterruptionFunction.Arn
+
+  # 3. Launched. The instance reached "running" — the end of a cold start, and
+  #    (after an interruption) the evidence that capacity came back.
+  InstanceLaunchedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-instance-launched"
+      Description: An EC2 instance entered the running state.
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.ec2
+        detail-type:
+          - EC2 Instance State-change Notification
+        detail:
+          state:
+            - running
+      Targets:
+        - Id: statechange-function
+          Arn: !GetAtt StateChangeFunction.Arn
+
+  # 4. Stopped. Either the scheduler (07) stopped it, or a Spot instance launched
+  #    with the "stop" interruption behaviour was reclaimed — the difference is
+  #    visible in the interruption handler's logs, not this one's.
+  InstanceStoppedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-instance-stopped"
+      Description: An EC2 instance entered the stopped state.
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.ec2
+        detail-type:
+          - EC2 Instance State-change Notification
+        detail:
+          state:
+            - stopped
+      Targets:
+        - Id: statechange-function
+          Arn: !GetAtt StateChangeFunction.Arn
+
+  # 5. Terminated. For a one-time Spot instance this is the last thing that ever
+  #    happens to it, and it is the confirmation that the interruption warning
+  #    two minutes earlier was real.
+  InstanceTerminatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-instance-terminated"
+      Description: An EC2 instance entered the terminated state.
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.ec2
+        detail-type:
+          - EC2 Instance State-change Notification
+        detail:
+          state:
+            - terminated
+      Targets:
+        - Id: statechange-function
+          Arn: !GetAtt StateChangeFunction.Arn
+
+  # ---------------------------------------------------------------------------
+  # Invoke permissions — one per rule, each scoped to that rule's ARN. A rule
+  # cannot invoke a function it was not explicitly granted, so an accidental
+  # extra rule elsewhere in the account cannot drive these handlers.
+  # ---------------------------------------------------------------------------
+  InterruptionWarningInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InterruptionFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt InterruptionWarningRule.Arn
+
+  RebalanceInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InterruptionFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RebalanceRecommendationRule.Arn
+
+  InstanceLaunchedInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StateChangeFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt InstanceLaunchedRule.Arn
+
+  InstanceStoppedInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StateChangeFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt InstanceStoppedRule.Arn
+
+  InstanceTerminatedInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StateChangeFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt InstanceTerminatedRule.Arn
+
+Outputs:
+  InterruptionFunctionArn:
+    Description: ARN of the Spot interruption handler.
+    Value: !GetAtt InterruptionFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-SpotInterruptionFunctionArn"
+
+  StateChangeFunctionArn:
+    Description: ARN of the instance state-change handler.
+    Value: !GetAtt StateChangeFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-SpotStateChangeFunctionArn"
+
+  MetricNamespace:
+    Description: CloudWatch namespace the Spot metrics are published to.
+    Value: !Sub "${ProjectName}/spot"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-SpotMetricNamespace"
+
+  InterruptionLogGroup:
+    Description: Log group to read during an interruption.
+    Value: !Ref InterruptionFunctionLogGroup
