@@ -184,6 +184,18 @@ It is safe to re-run: every step checks before it creates. Create the GitHub
 environments `dev`, `staging`, and `prod` yourself, and add required reviewers to
 `prod` for a manual approval gate.
 
+> **"One-time" is a lie in one specific case.** The deploy role's permissions are
+> a *file in this repository*
+> ([`scripts/deploy-role-policy.json`](scripts/deploy-role-policy.json)), but they
+> live in *IAM*. Editing the file changes nothing in the account until someone
+> re-runs `make bootstrap`, and nothing warns you — the next CI deploy simply
+> fails with an opaque `AccessDenied` for whatever the new permission was.
+>
+> **So: any pull request that touches `deploy-role-policy.json` needs an admin to
+> re-run `make -C infra bootstrap` before it is merged.** Milestone 3 needed
+> `s3:PutObject` (to upload the packaged Lambda zips) and duly failed this way
+> first.
+
 Until this is done, the validation job still runs and the deploy job is simply
 never triggered.
 
@@ -298,6 +310,23 @@ quota is zero or too low — common on new accounts. Two fixes:
   `make deploy PURCHASE=on-demand`; in CI, set the repository variable
   `AWS_PURCHASE_OPTION` to `on-demand`. Switch back to Spot once the quota
   increase is approved.
+
+**CI fails with `AccessDenied` on an action the policy file clearly allows.** The
+deploy role in IAM is stale. `deploy-role-policy.json` is only *applied* by
+`make bootstrap` — editing it does not touch the account. An admin re-runs:
+
+```bash
+make -C infra bootstrap
+```
+
+Confirm the role can do the thing it was denied, without guessing:
+
+```bash
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::<account>:role/aiap-github-deploy \
+  --action-names s3:PutObject \
+  --resource-arns arn:aws:s3:::aiap-dev-artifacts-<account>-us-east-1/spot/interruption.zip
+```
 
 **`There is no Spot capacity available that matches your request`.** Different
 from the quota error above, and fixed differently. This is **capacity**, not
