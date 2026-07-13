@@ -1,22 +1,28 @@
-# Infrastructure — Milestone 2
+# Infrastructure — Milestones 2 and 3
 
 The AI Agent Platform's foundational AWS infrastructure, as CloudFormation.
 
 > **Design, then deploy.** These templates are validated (`cfn-lint`) and written
-> to production standards, but they have **not been deployed to a live AWS
-> account** as part of this milestone — there was no account in the authoring
-> environment. See [Validation & limitations](#validation--limitations).
+> to production standards. See [Validation & limitations](#validation--limitations)
+> for exactly how far they have been exercised against a live account.
 
-The *why* behind every decision here is in the blog post,
-[Provisioning an AI Agent Platform with CloudFormation](../docs/blog/provisioning-an-ai-agent-platform-with-cloudformation.md).
-This file is the operational reference.
+The *why* behind every decision here is in the blog posts:
+[Provisioning an AI Agent Platform with CloudFormation](../docs/blog/provisioning-an-ai-agent-platform-with-cloudformation.md)
+(Milestone 2) and
+[Reducing AI Infrastructure Costs with EC2 Spot Instances](../docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md)
+(Milestone 3). This file is the operational reference.
 
 ## What this provisions
 
-A dedicated VPC, a disposable EC2 instance, a durable S3 bucket, an EventBridge
-bus with a placeholder Lambda, and CloudWatch log groups — the foundation later
-milestones build on. It installs **no** application software (OpenClaw, Ollama,
-n8n come later).
+A dedicated VPC, a disposable EC2 Spot instance, a durable S3 bucket, an
+EventBridge bus with a placeholder Lambda, and CloudWatch log groups — the
+foundation later milestones build on. It installs **no** application software
+(OpenClaw, Ollama, n8n come later).
+
+**Milestone 3** adds the interruption handling that makes the Spot instance safe
+to actually use: a drain agent on the instance that saves its work when AWS
+reclaims it, and EventBridge rules and Lambdas in the account that count, log,
+and re-publish every Spot event. See **[SPOT.md](SPOT.md)**.
 
 > **Educational scope.** This project is built to learn from. The compute
 > defaults to a `t3.xlarge` on **Spot** (~$0.05/hour, ~$36/month; ~$0.17/hour
@@ -34,19 +40,31 @@ n8n come later).
 ```text
 infra/
 ├── Makefile                     convenience wrapper around the AWS CLI
-└── cloudformation/
-    ├── 01-network.yaml          VPC, public subnet, IGW, route table, security group
-    ├── 02-iam.yaml              EC2 role + instance profile, Lambda role (least privilege)
-    ├── 03-compute.yaml          launch template + disposable EC2 Spot instance, encrypted root EBS
-    ├── 04-storage.yaml          S3 artifact bucket (encrypted, versioned, TLS-only)
-    ├── 05-events.yaml           EventBridge bus + rule + placeholder Lambda
-    ├── 06-observability.yaml    CloudWatch log groups with retention
-    └── params/
-        └── dev.example.json     example parameter values
+├── SCHEDULER.md                 the instance scheduler, documented
+├── SPOT.md                      Spot interruption handling, documented
+├── cloudformation/
+│   ├── 01-network.yaml          VPC, public subnet, IGW, route table, security group
+│   ├── 02-iam.yaml              EC2 role + instance profile, Lambda role (least privilege)
+│   ├── 03-compute.yaml          launch template + disposable EC2 Spot instance + drain agent
+│   ├── 04-storage.yaml          S3 artifact bucket (encrypted, versioned, TLS-only)
+│   ├── 05-events.yaml           EventBridge bus + rule + placeholder Lambda
+│   ├── 06-observability.yaml    CloudWatch log groups with retention
+│   ├── 07-scheduler.yaml        add-on: scheduled start/stop of the instance
+│   ├── 08-spot.yaml             add-on: Spot interruption rules, handlers, IAM, metrics
+│   └── params/
+│       └── dev.example.json     example parameter values
+└── lambda/                      the Go Lambdas (one module)
+    ├── cmd/start · cmd/stop                 the scheduler's handlers (07)
+    ├── cmd/interruption · cmd/statechange   the Spot handlers (08)
+    └── internal/ec2sched · internal/spot    their logic, unit-tested
 ```
 
 Each template is a standalone stack. They are linked only by CloudFormation
 exports/imports, so any one can be read, reviewed, or updated on its own.
+
+`01`–`06` are the core, deployed by `make deploy` with nothing but the AWS CLI.
+`07` and `08` are **add-ons**: they carry Go code, so they need the Go toolchain
+and the artifact bucket, and each has its own deploy target.
 
 ## Deploy order
 
@@ -59,15 +77,24 @@ flowchart LR
     i --> e["05 · events"]
     s["04 · storage"]
     o["06 · observability"]
+    e --> sp["08 · spot"]
+    s -.->|"lambda zips"| sp
     c -.->|imports| n
     c -.->|imports| i
     e -.->|imports| i
+
+    classDef addon stroke-dasharray: 5 5
+    class sp addon
 ```
 
 `03-compute` imports the subnet, security group, and instance profile;
 `05-events` imports the Lambda role. `04-storage` and `06-observability` have no
 imports. The IAM stack grants access to the bucket and log groups by naming
 convention, so it does not need to import them.
+
+`08-spot` (the add-on) imports the event bus from `05-events` — it re-publishes
+Spot events onto it — and reads its Lambda code from the `04-storage` bucket, so
+both must exist first. `07-scheduler` likewise reads its code from the bucket.
 
 ## Prerequisites
 
@@ -84,7 +111,8 @@ With the [Makefile](Makefile):
 cd infra
 
 make lint                 # validate every template with cfn-lint
-make deploy               # deploy all six stacks in order
+make deploy               # deploy the six core stacks in order (AWS CLI only)
+make spot                 # add Spot interruption handling (needs Go) — Milestone 3
 make outputs              # show every stack's outputs
 make delete               # tear down (the artifact bucket is retained)
 ```
@@ -184,11 +212,17 @@ are tuned for a low-cost development environment.
 | `PublicSubnetCidr` | `10.20.1.0/24` | network | The foundation's single subnet. |
 | `InstanceType` | `t3.xlarge` | compute | 4 vCPU/16 GiB, not free-tier (~$0.05/hr on the default Spot, ~$0.17/hr On-Demand). Set `t3.micro` for a free-tier environment. |
 | `PurchaseOption` | `spot` | compute | `spot` or `on-demand`. Use `on-demand` if the account's Spot quota is zero. |
+| `SpotInterruptionBehavior` | `terminate` | compute | `terminate` (one-time request, disposable) or `stop` (persistent request, stoppable — required by the scheduler). |
+| `SpotMaxPrice` | *(empty)* | compute | Empty caps at the On-Demand price. A lower cap does **not** make Spot cheaper — see [SPOT.md](SPOT.md#parameters). |
 | `RootVolumeSize` | `30` | compute | GiB. OS and runtime temp only. |
 | `SshKeyName` | *(empty)* | compute | Empty disables SSH; use SSM Session Manager. |
-| `LogRetentionDays` | `14` | events, observability | Raise for staging/prod. |
+| `SubnetId` / `SecurityGroupId` | *(empty)* | compute | Empty imports from the network stack. Override to use an existing VPC. |
+| `DrainUnits` | *(empty)* | compute | systemd units the drain agent stops on interruption, e.g. `"ollama.service"`. |
+| `DrainPollSeconds` | `5` | compute | How often the drain agent polls IMDS for an interruption notice. |
+| `LogRetentionDays` | `14` | events, observability, spot | Raise for staging/prod. |
 | `NoncurrentVersionExpirationDays` | `90` | storage | Bounds versioning cost. |
-| `LatestAmiId` | *(SSM)* | compute | Resolves the latest Amazon Linux 2023 AMI; do not override. |
+| `LatestAmiId` | *(SSM)* | compute | Resolves the latest Amazon Linux 2023 AMI; override to pin one. |
+| `RebalanceRuleState` | `ENABLED` | spot | `DISABLED` to ignore the advisory rebalance signal. |
 
 ## Cost
 
@@ -202,16 +236,19 @@ so the default configuration is the cheapest row below:
 | ...or On-Demand (needed to schedule stop/start) | ~$0.166/hr | ~$120 (24×7) / ~$70 (scheduled) |
 | Root EBS (30 GiB gp3) | $0.08/GiB-month | ~$2.40 |
 | S3 (artifacts) | a few GiB + requests | <$1 |
-| Lambda | placeholder, near-zero invocations | ~$0 (free tier) |
+| Lambda | placeholder + Spot handlers, low invocations | ~$0 (free tier) |
 | EventBridge | custom bus, low event volume | ~$0 |
 | CloudWatch Logs | low volume, 14-day retention | <$1 |
+| CloudWatch metrics (Spot) | 5 custom metrics | ~$1.50 |
 | VPC / IGW / SG / routes | no NAT gateway | $0 |
-| **Total** | | **~$40/mo (Spot default) to ~$125/mo (On-Demand 24×7)** |
+| **Total** | | **~$42/mo (Spot default) to ~$127/mo (On-Demand 24×7)** |
 
 The instance dominates the bill, and the purchase option dominates the instance.
 The **default one-time Spot** instance is cheapest (~$36/mo) but is *disposable*:
 it terminates on interruption and **cannot be stopped**, so it can't use the
-scheduler. Two other levers each cut cost a different way: the
+scheduler. That disposability is safe to rely on only because Milestone 3's
+[drain agent](SPOT.md#the-drain-agent) gets the instance's work into S3 before it
+goes. Two other levers each cut cost a different way: the
 [instance scheduler](#instance-scheduler-optional-add-on) needs a *stoppable*
 instance (On-Demand or persistent Spot) and then runs it 18:00–08:00 only
 (~40% off that compute); and **`t3.micro` as a free-tier override** — set
@@ -219,6 +256,10 @@ instance (On-Demand or persistent Spot) and then runs it 18:00–08:00 only
 first-year account. The largest *architectural* saving is a **public subnet with
 no NAT gateway** (~$32/month per
 NAT avoided). There are no always-on managed services in the foundation.
+
+The saving scales with the instance, which is the whole argument for Spot on AI
+workloads: ~$84/month on the default `t3.xlarge`, but ~$510/month on a
+`g5.xlarge` GPU. See [SPOT.md](SPOT.md#cost).
 
 ## Security overview
 
@@ -228,7 +269,10 @@ NAT avoided). There are no always-on managed services in the foundation.
   SSRF-style credential theft.
 - **Least-privilege IAM.** No wildcard resource ARNs; the EC2 role can reach
   only this project's bucket and log groups, and the Lambda role only its own
-  log group.
+  log group. The Spot handlers hold exactly one EC2 permission —
+  `DescribeInstances` — so they can look and cannot touch: nothing in Milestone 3
+  can stop, start, or terminate an instance. Where an action admits no resource
+  ARN at all (`cloudwatch:PutMetricData`), it is scoped by condition key instead.
 - **Encryption at rest.** The root EBS volume and the S3 bucket are encrypted.
 - **Encryption in transit.** The bucket policy denies any non-TLS request.
 - **No public storage.** All S3 public-access blocks are on and ACLs are
@@ -278,10 +322,28 @@ same step), then the normal deploy adds the policy back and reconciles drift. Th
 bucket's contents are preserved throughout. `make import-storage` does the same
 for that one stack if you want to fix storage on its own.
 
+**The instance was replaced when I redeployed compute.** Expected. The drain
+agent and the ownership tags live in the launch template, so adding them creates
+a new template version, and the instance tracks the latest version. The instance
+is disposable by design — if replacing it lost something, that something was on
+the root volume and should have been in
+[`/var/lib/<project>/artifacts`](SPOT.md#the-drain-agent), which the drain agent
+copies to S3.
+
+**Spot events never reach the handlers.** The rules must be on the account's
+**default** event bus. AWS services cannot publish to a custom bus, so a rule
+matching `source: aws.ec2` on the platform bus deploys cleanly and never fires.
+See [SPOT.md](SPOT.md#why-the-rules-are-on-the-default-bus).
+
 ## Validation & limitations
 
-- **Validated** with `cfn-lint` (all six templates pass with no errors or
+- **Validated** with `cfn-lint` (all eight templates pass with no errors or
   warnings), and cross-stack imports were checked against their exports.
+- **The Go handlers are unit-tested** (`make -C infra lambda-test`), including the
+  ownership filter, the interruption deadline, and the two ways `PutEvents` can
+  fail. **The drain agent was exercised end to end** against a stubbed instance
+  metadata service: it polls, detects the notice, stops its units in order, syncs
+  the artifacts, and exits without re-draining.
 - **Deployment is being shaken out on a live account.** The stacks have been
   applied via CI; the first real run surfaced an account-level Spot quota (see
   [Troubleshooting](#troubleshooting)), which the `PurchaseOption` parameter now
@@ -310,10 +372,31 @@ launched with `SpotInterruptionBehavior=stop`. Full documentation, including the
 architecture, IAM, timezone and schedule editing, cost model, and troubleshooting,
 is in **[SCHEDULER.md](SCHEDULER.md)**.
 
+## Spot interruption handling (Milestone 3)
+
+The compute stack buys Spot by default. Milestone 3 is what makes that safe: a
+**drain agent** on the instance that stops the workload and saves its output to
+S3 within the two-minute reclaim window, and **EventBridge rules and Lambdas** in
+the account that count, log, and re-publish every Spot event
+([`08-spot.yaml`](cloudformation/08-spot.yaml), code in [`lambda/`](lambda)):
+
+```bash
+make spot                                   # build the handlers and deploy
+make simulate-interruption INSTANCE_ID=i-…  # rehearse an interruption
+```
+
+The key idea, and the reason there are two halves: **a Lambda cannot save your
+work.** Only something running on the instance can stop the workload and flush
+its output before the disk goes away. Full documentation — the events, the drain
+agent, the IAM, the metrics, when *not* to use Spot, and which AI workloads suit
+it — is in **[SPOT.md](SPOT.md)**.
+
 ## What comes next
 
-`03-compute` already provisions its instance through a **launch template**, so
-the next milestone can place that template behind an Auto Scaling group for
-Spot interruption recovery without re-architecting. Private subnets, a NAT path,
-VPC endpoints, alarms, and dashboards arrive in their respective milestones —
-see the [roadmap](../README.md#roadmap).
+`03-compute` already provisions its instance through a **launch template**, so a
+later milestone can place that template behind an Auto Scaling group — which is
+what turns "the instance was interrupted and its work is safe in S3" into "the
+instance was interrupted and a replacement is already running". Milestone 4 bakes
+a custom AMI, which shrinks the cold start that an interruption costs. Private
+subnets, a NAT path, VPC endpoints, alarms, and dashboards arrive in their
+respective milestones — see the [roadmap](../README.md#roadmap).
