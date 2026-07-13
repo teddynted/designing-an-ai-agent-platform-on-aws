@@ -563,6 +563,7 @@ Full teardown is `make delete` (the artifact bucket is retained by design).
 
 | Symptom | Cause / fix |
 | --- | --- |
+| `There is no Spot capacity available that matches your request` | **Capacity**, not price and not quota — see [below](#no-spot-capacity). |
 | `Max spot instance count exceeded` on deploy | The account's Spot quota is zero — common on new accounts. Request a Spot quota increase (it is measured in vCPUs; a `t3.xlarge` needs 4), or deploy `PURCHASE=on-demand` in the meantime. See the [infra README](README.md#troubleshooting). |
 | The handler runs but always says *"not tagged for this platform"* | The instance is missing the `Project`/`Environment` tags. It predates Milestone 3 — redeploy `03-compute` (which replaces it), or add the tags by hand. |
 | The handler never runs at all | The rules are on the **default** bus. If they were moved to the platform bus, they will never fire — EC2 cannot publish there. Check `aws events list-rules --name-prefix <project>-<env>`. |
@@ -572,3 +573,49 @@ Full teardown is `make delete` (the artifact bucket is retained by design).
 | A misrouted-event error in the logs | A rule points at the wrong function. That is a deployment bug, and it is loud on purpose: the correct function is not seeing the event. |
 | The instance restarts itself after a manual stop | Expected for a **persistent** Spot request (`SpotInterruptionBehavior=stop`) — that *is* the interruption-recovery behaviour. See [SCHEDULER.md](SCHEDULER.md). |
 | Interruptions are constant | The instance type is scarce in that AZ. The interruption rate is a property of the type — check the `InterruptionWarnings` metric per `InstanceType`, and pick a less contended type. Flexibility across types and AZs is the real fix, and it needs an Auto Scaling group (Milestone 19). |
+
+### No Spot capacity
+
+```text
+There is no Spot capacity available that matches your request.
+```
+
+This is the one that catches people, because it is **not** a price problem and
+**not** a quota problem (`Max spot instance count exceeded` is the quota one).
+There is simply no spare capacity of that instance type, in that AZ, at that
+moment. A one-time Spot request that cannot be filled does not launch, and the
+stack rolls back.
+
+Lowering `SpotMaxPrice` does not help. Raising it does not help either — you were
+never outbid. **Capacity is not for sale.**
+
+This platform runs one instance, in one subnet, in one AZ, of one type. That is
+**zero capacity flexibility, by construction**, and no amount of interruption
+handling fixes it — interruption handling protects your *work*, not your ability
+to launch.
+
+Ask AWS where the capacity actually is, rather than guessing (10 is best, 1 worst):
+
+```bash
+aws ec2 get-spot-placement-scores --region us-east-1 \
+  --instance-types t3.xlarge c5.xlarge m5.xlarge \
+  --target-capacity 1 --target-capacity-unit-type units \
+  --region-names us-east-1 --single-availability-zone
+```
+
+Three ways out, in increasing order of how much they actually fix:
+
+1. **Pick a type with capacity in your AZ.** `make deploy-03-compute
+   INSTANCE_TYPE=c5.xlarge` (or the `AWS_INSTANCE_TYPE` repository variable in
+   CI). Cheapest change; still a single point of failure.
+2. **Fall back to On-Demand.** `PURCHASE=on-demand`. Always has capacity, costs
+   ~3× more. The drain agent and all five rules still deploy and work — the IMDS
+   notice path simply never fires.
+3. **Diversify.** Several instance types across several AZs, with the
+   `capacity-optimized` allocation strategy, behind an **Auto Scaling group**.
+   This is the only real answer, and it is Milestone 19. The compute stack
+   already provisions through a launch template precisely so that this is a
+   change of container, not a rewrite.
+
+Retrying sometimes works, because capacity fluctuates. It is a coin toss, not a
+fix.

@@ -299,6 +299,39 @@ quota is zero or too low — common on new accounts. Two fixes:
   `AWS_PURCHASE_OPTION` to `on-demand`. Switch back to Spot once the quota
   increase is approved.
 
+**`There is no Spot capacity available that matches your request`.** Different
+from the quota error above, and fixed differently. This is **capacity**, not
+price and not quota: there is no spare capacity of that instance type, in that
+Availability Zone, right now. A one-time Spot request that cannot be filled
+simply does not launch, and the stack rolls back.
+
+The platform runs **one** instance, in **one** subnet, in **one** AZ, of **one**
+type — which is zero capacity flexibility by construction. Ask AWS where the
+capacity actually is before guessing (10 is best, 1 is worst):
+
+```bash
+aws ec2 get-spot-placement-scores --region us-east-1 \
+  --instance-types t3.xlarge c5.xlarge m5.xlarge \
+  --target-capacity 1 --target-capacity-unit-type units \
+  --region-names us-east-1 --single-availability-zone
+```
+
+Then either pick a type that scores well in your AZ —
+
+```bash
+make deploy-03-compute INSTANCE_TYPE=c5.xlarge     # or set AWS_INSTANCE_TYPE in CI
+```
+
+— or fall back to On-Demand (`PURCHASE=on-demand`), which always has capacity and
+costs more. Retrying can also work, since capacity fluctuates, but it is a
+coin-toss, not a fix.
+
+The real fix is diversification: several instance types across several AZs, with
+the `capacity-optimized` allocation strategy. That needs an **Auto Scaling group**
+and is deliberately deferred to Milestone 19 — the compute stack already
+provisions through a launch template so that it is a drop-in change when it
+arrives. See [SPOT.md](SPOT.md#troubleshooting).
+
 **A stack is `ROLLBACK_COMPLETE` / `CREATE_FAILED`.** A create that fails leaves
 the stack in a state CloudFormation cannot update, so it must be deleted before
 it can be recreated. `make deploy` now does this for you: before deploying each

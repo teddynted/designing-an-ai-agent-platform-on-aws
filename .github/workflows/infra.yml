@@ -137,12 +137,19 @@ jobs:
       # AWS_PURCHASE_OPTION to "on-demand" to deploy without Spot — useful when
       # the account's Spot quota is still zero — then remove it once a Spot
       # quota increase is approved.
+      #
+      # AWS_INSTANCE_TYPE overrides the instance type. Set it when the template's
+      # default has no Spot capacity in this environment's AZ, which fails the
+      # deploy with "There is no Spot capacity available that matches your
+      # request" — a capacity problem, not a quota or price one. Leave it unset to
+      # take the template's default.
       - name: Deploy all stacks
         run: >-
           make -C infra deploy
           ENV="$TARGET_ENV"
           REGION="${{ vars.AWS_REGION }}"
           PURCHASE="${{ vars.AWS_PURCHASE_OPTION || 'spot' }}"
+          INSTANCE_TYPE="${{ vars.AWS_INSTANCE_TYPE }}"
 
       # Spot interruption handling (Milestone 3). It is deployed after the core
       # stacks, not with them: its Lambdas must be built and uploaded to the
