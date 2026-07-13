@@ -119,9 +119,42 @@ the On-Demand price, and take the market price gratefully.
 
 **Capacity, not price, is what actually bites.** The modern failure mode is not
 "the price spiked" — it is "there is no `g5.xlarge` capacity in this AZ right
-now". A one-time Spot request that cannot be filled simply does not launch. The
-answer is flexibility (more types, more AZs), which is a fleet-level property and
-the reason [Milestone 19](#what-comes-next) exists.
+now". A one-time Spot request that cannot be filled simply does not launch.
+
+I did not have to wait long to be proved right. Deploying this very milestone
+failed:
+
+```text
+Resource handler returned message: "There is no Spot capacity available
+that matches your request."
+```
+
+Not a price problem — Spot was $0.066 against an On-Demand $0.166, so the
+discount was there for the taking. Not a quota problem either; that one says `Max
+spot instance count exceeded`. There was simply no `t3.xlarge` to be had in this
+platform's Availability Zone. And you cannot outbid your way to capacity that
+does not exist: **capacity is not for sale.**
+
+The useful move is to stop guessing and ask AWS, with the Spot placement score
+API (10 is best, 1 is worst):
+
+```bash
+aws ec2 get-spot-placement-scores --region us-east-1 \
+  --instance-types t3.xlarge --target-capacity 1 \
+  --target-capacity-unit-type units --single-availability-zone
+```
+
+Which said, bluntly, that my AZ scored **1 out of 10** — for `t3.xlarge`, and for
+every other 4-vCPU type I tried. I switched to a `c5.xlarge` (which scored 3) and
+it launched.
+
+That is a patch, not a fix, and it is worth being honest about which. This
+platform runs **one** instance, in **one** subnet, in **one** AZ, of **one**
+type. That is zero capacity flexibility *by construction*, and no amount of
+interruption handling repairs it — interruption handling protects your **work**,
+not your **ability to launch**. The real answer is diversification across types
+and AZs, which is a fleet-level property, and the reason
+[Milestone 19](#what-comes-next) exists.
 
 ### One-time vs persistent requests
 
@@ -631,6 +664,14 @@ post, take that.
 permission of its kind, and can a condition key narrow it? A policy with a
 justified wildcard and a condition beats a policy with no wildcards and no
 thought.
+
+**Interruption handling is not availability.** This is the lesson the failed
+deploy taught me, and I had written the post without it. Everything in this
+milestone protects the *work* on the instance. Not one line of it helps when
+there is no instance to be had — and "no Spot capacity in this AZ" is a
+first-class, ordinary Tuesday failure, not an edge case. Surviving interruptions
+and being able to launch at all are two different problems, and I had quietly
+assumed solving the first bought me something towards the second. It buys nothing.
 
 **And the boring saving is the big one.** Spot is a checkbox and a shell script.
 It cut this platform's compute bill by 70% — more than any clever architectural

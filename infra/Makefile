@@ -14,6 +14,19 @@ CFN_DIR     := cloudformation
 # count exceeded" until a Spot quota increase is approved.
 PURCHASE    ?= spot
 
+# Instance type. Empty uses the template's default (t3.xlarge). Override it when
+# the default type has no Spot capacity in this environment's AZ — a launch then
+# fails with "There is no Spot capacity available that matches your request",
+# which is a capacity problem, not a price or quota one. Check before choosing:
+#
+#   aws ec2 get-spot-placement-scores --instance-types c5.xlarge \
+#     --target-capacity 1 --target-capacity-unit-type units \
+#     --region-names us-east-1 --single-availability-zone
+#
+# A single instance in a single AZ has no capacity flexibility by construction;
+# diversifying across types and AZs needs an Auto Scaling group (Milestone 19).
+INSTANCE_TYPE ?=
+
 # Instance scheduler (07-scheduler): the instance to start/stop, its timezone,
 # and where the packaged Go Lambdas live. INSTANCE_ID is required for scheduler
 # targets; the code bucket defaults to the storage stack's artifact bucket.
@@ -36,9 +49,11 @@ TAGS        := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Mi
 SPOT_TAGS   := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=3
 
 # Per-stack extra parameter overrides. Only the compute stack declares
-# PurchaseOption, so it must be passed to that stack alone — passing it to a
-# stack that lacks it makes `aws cloudformation deploy` fail.
-EXTRA_03-compute := PurchaseOption=$(PURCHASE)
+# PurchaseOption and InstanceType, so they must be passed to that stack alone —
+# passing a parameter to a stack that lacks it makes `aws cloudformation deploy`
+# fail. InstanceType is omitted entirely when unset, so the template's default
+# stands rather than being overridden with an empty string.
+EXTRA_03-compute := PurchaseOption=$(PURCHASE) $(if $(INSTANCE_TYPE),InstanceType=$(INSTANCE_TYPE))
 
 # Stack states in which the CREATE never succeeded. `aws cloudformation deploy`
 # can only update an existing stack, so a stack stuck in one of these must be
