@@ -77,20 +77,22 @@ jobs:
               sys.exit(1)
           print(f"{len(imports)} cross-stack imports all resolve against {len(exports)} exports")
 
-      # The scheduler Lambdas are Go. Vet, test, and cross-compile them for the
-      # Lambda runtime (arm64 Linux) so a broken handler is caught before deploy.
+      # The Lambdas are Go: the scheduler's start/stop, and the Spot handlers.
+      # Vet, test, and cross-compile them for the Lambda runtime (arm64 Linux) so
+      # a broken handler is caught before deploy.
       - uses: actions/setup-go@v5
         with:
           go-version-file: infra/lambda/go.mod
           cache-dependency-path: infra/lambda/go.sum
 
-      - name: Test and build scheduler Lambdas
+      - name: Test and build the Go Lambdas
         working-directory: infra/lambda
         run: |
           go vet ./...
           go test ./...
-          GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o /tmp/start ./cmd/start
-          GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o /tmp/stop ./cmd/stop
+          for fn in start stop interruption statechange; do
+            GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "/tmp/$fn" "./cmd/$fn"
+          done
 
   # ---------------------------------------------------------------------------
   # Deployment — manual only, gated behind an environment and an explicit
@@ -141,6 +143,21 @@ jobs:
           ENV="$TARGET_ENV"
           REGION="${{ vars.AWS_REGION }}"
           PURCHASE="${{ vars.AWS_PURCHASE_OPTION || 'spot' }}"
+
+      # Spot interruption handling (Milestone 3). It is deployed after the core
+      # stacks, not with them: its Lambdas must be built and uploaded to the
+      # artifact bucket that 04-storage creates, so it needs both the Go toolchain
+      # and a bucket that exists. `make spot` packages and deploys in one step.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: infra/lambda/go.mod
+          cache-dependency-path: infra/lambda/go.sum
+
+      - name: Deploy Spot interruption handling
+        run: >-
+          make -C infra spot
+          ENV="$TARGET_ENV"
+          REGION="${{ vars.AWS_REGION }}"
 
       - name: Show stack outputs
         run: make -C infra outputs ENV="$TARGET_ENV" REGION="${{ vars.AWS_REGION }}"

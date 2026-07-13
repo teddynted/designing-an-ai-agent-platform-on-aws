@@ -117,9 +117,10 @@ fi
 # 3. Deploy permissions (idempotent put-role-policy)
 # ---------------------------------------------------------------------------
 # Substitute the account and project into the starter policy, strip the human
-# "Comment" field IAM would reject, and attach it inline.
+# "Comment" fields IAM would reject — both the top-level one and the per-statement
+# ones that explain why each grant exists — and attach it inline.
 permissions="$(sed -e "s/__ACCOUNT_ID__/${ACCOUNT_ID}/g" -e "s/__PROJECT__/${PROJECT}/g" "$POLICY_TEMPLATE" \
-  | jq 'del(.Comment)')"
+  | jq 'del(.Comment) | .Statement |= map(del(.Comment))')"
 say "attaching the deploy permissions policy"
 aws iam put-role-policy --role-name "$ROLE_NAME" \
   --policy-name "${PROJECT}-deploy" \
