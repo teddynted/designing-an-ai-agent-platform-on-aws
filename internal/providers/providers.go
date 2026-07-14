@@ -29,6 +29,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -39,6 +40,15 @@ import (
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/llm"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/ollama"
 )
+
+// ErrConfig means the configured provider could not be built from the environment.
+//
+// It exists so a caller can recognise a misconfiguration without importing a vendor to ask
+// whether it was ollama.ErrConfig or bedrock.ErrConfig. Milestone 8 left exactly that leak
+// in cmd/llm — it checked ollama.ErrConfig, and therefore silently gave the wrong exit
+// code for every Bedrock misconfiguration. The vendors' own errors still wrap through, so
+// nothing that already worked stops working.
+var ErrConfig = errors.New("the configured llm provider could not be built")
 
 // EnvProvider selects the provider.
 const EnvProvider = "LLM_PROVIDER"
@@ -85,28 +95,29 @@ func New(ctx context.Context, log *slog.Logger) (llm.Provider, Info, error) {
 	case "ollama":
 		cfg, err := ollama.ConfigFromEnv()
 		if err != nil {
-			return nil, Info{}, err
+			return nil, Info{}, fmt.Errorf("%w: %w", ErrConfig, err)
 		}
 		provider, err := ollama.New(cfg, log)
 		if err != nil {
-			return nil, Info{}, err
+			return nil, Info{}, fmt.Errorf("%w: %w", ErrConfig, err)
 		}
 		return provider, Info{Provider: name, Model: cfg.Model, Endpoint: cfg.BaseURL, Stream: cfg.Stream, Redacted: cfg.Redacted()}, nil
 
 	case "bedrock":
 		cfg, err := bedrock.ConfigFromEnv()
 		if err != nil {
-			return nil, Info{}, err
+			return nil, Info{}, fmt.Errorf("%w: %w", ErrConfig, err)
 		}
 		provider, err := bedrock.New(ctx, cfg, log)
 		if err != nil {
-			return nil, Info{}, err
+			return nil, Info{}, fmt.Errorf("%w: %w", ErrConfig, err)
 		}
 		return provider, Info{Provider: name, Model: cfg.ModelID, Endpoint: "AWS " + cfg.Region, Stream: cfg.Stream, Redacted: cfg.Redacted()}, nil
 
 	default:
 		known := append([]string(nil), Known...)
 		sort.Strings(known)
-		return nil, Info{}, fmt.Errorf("unknown %s %q (known: %s)", EnvProvider, name, strings.Join(known, ", "))
+		return nil, Info{}, fmt.Errorf("%w: unknown %s %q (known: %s)",
+			ErrConfig, EnvProvider, name, strings.Join(known, ", "))
 	}
 }

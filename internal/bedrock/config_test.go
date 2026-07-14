@@ -20,6 +20,7 @@ func setEnv(t *testing.T, overrides map[string]string) {
 		EnvRegion, EnvModelID, EnvEndpoint, EnvContextTokens, EnvMaxTokens, EnvTemperature,
 		EnvTimeout, EnvIdleTimeout, EnvRetryAttempts, EnvRetryDelay, EnvStream,
 		EnvInputCostPer1M, EnvOutputCostPer1M,
+		EnvTools, EnvReasoning, EnvPromptCache,
 	} {
 		t.Setenv(key, base[key])
 	}

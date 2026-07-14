@@ -4,13 +4,17 @@
 > is planned. Every milestone updates this file; if it disagrees with the code, the
 > file is wrong.
 >
-> **Last updated:** Milestone 8 — Amazon Bedrock Integration.
+> **Last updated:** Milestone 9 — Claude Integration.
 > **Deployed:** eight CloudFormation stacks + an image pipeline, in `dev`, plus four
 > integration layers — workflow orchestration (n8n), agent execution (OpenClaw), and
 > inference behind **one** provider abstraction with **two** implementations: Ollama
 > (local) and Amazon Bedrock (managed), switched by `LLM_PROVIDER`.
-> **New AWS resource:** an **opt-in, model-scoped IAM policy** for Bedrock — the first
-> AWS resource an integration milestone has added, and it grants **nothing** by default.
+> **New in M9:** the model can now **act**. Through Bedrock, Claude calls the platform's own
+> tools — it can trigger an n8n workflow and hand work to an OpenClaw agent — inside a
+> bounded loop. **No new AWS resource, and no new credential**: Claude was already reachable
+> the moment BEDROCK_MODEL_ID named it.
+> **New AWS resource (M8):** an **opt-in, model-scoped IAM policy** for Bedrock — the first
+> AWS resource an integration milestone added, and it grants **nothing** by default.
 > **Not deployed by this repository:** n8n, OpenClaw and Ollama themselves (they live in
 > [their own repositories](../../README.md#related-repositories)); Bedrock is AWS's to
 > run. See [What is not built](#what-is-not-built).
@@ -28,6 +32,7 @@ it, and they are kept that way on purpose, as the record of a decision:
 | [openclaw-diagrams.md](openclaw-diagrams.md) | **M6** — the agent-execution integration. |
 | [ollama-diagrams.md](ollama-diagrams.md) | **M7** — inference and the provider abstraction. |
 | [bedrock-diagrams.md](bedrock-diagrams.md) | **M8** — managed inference, and what a second provider did to the abstraction. |
+| [claude-diagrams.md](claude-diagrams.md) | **M9** — a model that can act: tool use, structured output, and the retry rule it broke. |
 | **this file** | **Everything, as it exists today.** |
 
 ## 1. Runtime architecture
@@ -79,8 +84,9 @@ flowchart TB
     ag["agent.Service → Runtime (M6)<br/>submit · track · retrieve · cancel<br/>budgets enforced · output validated"]
     n8n["self-hosted n8n<br/>ANOTHER REPOSITORY"]
     oc["OpenClaw<br/>ANOTHER REPOSITORY"]
-    llm["llm.Service → Provider (M7)<br/>the platform's OWN inference<br/>validate · fit the context · log"]
+    llm["llm.Service → Provider (M7)<br/>the platform's OWN inference<br/>validate · fit the context · log<br/><b>+ the TOOL LOOP (M9)</b>"]
     factory{{"internal/providers (M8)<br/>LLM_PROVIDER picks ONE<br/>the only package importing two vendors"}}
+    toolreg["internal/tools (M9)<br/>what Claude may DO<br/>the model CHOOSES from an allowlist,<br/>it never AUTHORS an instruction"]
     ollama["Ollama<br/>ANOTHER REPOSITORY<br/>LOCAL — the prompt does not leave"]
 
     ec2 --- ebs
@@ -101,6 +107,9 @@ flowchart TB
     factory -->|"LLM_PROVIDER=ollama<br/>(the default)"| ollama
     factory -->|"LLM_PROVIDER=bedrock<br/>SigV4 · NO stored credential"| bedrock
     iampol -.->|"permits · names the models"| bedrock
+    llm --> toolreg
+    toolreg -->|"run_workflow — WRITE"| wf
+    toolreg -->|"submit_agent_task — WRITE"| ag
     llm -.->|"structured logs"| cw
     oc -.->|"output — UNTRUSTED,<br/>validated before use"| ag
     wf -.->|"structured logs"| cw
@@ -109,12 +118,12 @@ flowchart TB
     classDef aws fill:#FF9900,stroke:#232F3E,color:#232F3E
     classDef store fill:#3F8624,stroke:#243B0B,color:#FFFFFF
     classDef ext fill:#E8E8E8,stroke:#666,color:#232F3E
-    class ec2,l1,l2,dispatch,rules,defbus,platbus,wf,ag,llm,factory,bedrock,iampol aws
+    class ec2,l1,l2,dispatch,rules,defbus,platbus,wf,ag,llm,factory,bedrock,iampol,toolreg aws
     class s3,cw,ami,ebs store
     class ssm,n8n,oc,ollama ext
 ```
 
-**The five facts this diagram is really carrying:**
+**The six facts this diagram is really carrying:**
 
 1. **Nothing durable lives on the instance.** The root volume is deleted on
    termination, so anything that must survive goes to S3 — which is why the drain
@@ -137,7 +146,15 @@ flowchart TB
    needed. That is the inference plane, and it is
    [a correction to what Milestone 6 said](../../INFERENCE.md#wait--milestone-6-said-the-platform-calls-no-model),
    not a contradiction of it.
-5. **Bedrock is inside the region and outside the VPC, and that is the whole point of
+5. **The arrows from the inference plane now point BACK into the platform (M9).** That is
+   new, and it is the most consequential edge on this diagram. Until Milestone 8, inference
+   was a leaf: a prompt went out, tokens came back, and nothing else happened. Now Claude
+   can call `run_workflow` and `submit_agent_task` — so an *inference* can start an n8n run
+   and open a pull request. The graph has a cycle in it, and the cycle spends money.
+   That is why "a retry is safe here" — said in bold in Milestones 7 and 8 — is
+   [withdrawn](../../INFERENCE.md#a-retry-was-safe-here--milestone-9-withdrew-that), and why
+   the loop refuses to retry a conversation in which a `Write` tool has already run.
+6. **Bedrock is inside the region and outside the VPC, and that is the whole point of
    drawing it there.** It is the one arrow on this diagram where **the prompt leaves the
    network** — into AWS, in your account's region, but *out*. That is the deal, it should
    be a decision rather than a default, and it is why `LLM_PROVIDER` defaults to `ollama`
@@ -268,12 +285,13 @@ flowchart TB
     m6["M6 · OpenClaw integration<br/>the platform can now DELEGATE WORK<br/>submit · track · cancel · budget · validate"] --> m7
     m7["M7 · Ollama + provider abstraction<br/>the platform can now THINK, locally<br/>streaming · stall-detected · prompt never leaves<br/>(an errand is not a function call)"] --> m8
     m8["M8 · Amazon Bedrock<br/>the platform can now CHOOSE ITS BRAIN<br/>one env var · IAM, no key · throttled ≠ down<br/>(a sample of one is not an abstraction)"] --> m9
+    m9["M9 · Claude<br/>the model can now ACT<br/>tool use · schemas · reasoning<br/>(and 'a retry is safe here' is WITHDRAWN)"] --> m10
 
-    m9["M9 · Claude<br/>a third provider, a third auth model"]:::next
+    m10["M10 · Hybrid routing<br/>choose a provider per request"]:::next
 
     classDef done fill:#3F8624,stroke:#243B0B,color:#FFFFFF
     classDef next fill:#E8E8E8,stroke:#666,color:#232F3E,stroke-dasharray: 5 5
-    class m1,m2,m3,m4,m5,m6,m7,m8 done
+    class m1,m2,m3,m4,m5,m6,m7,m8,m9 done
 ```
 
 The dependency between them is not arbitrary, and it is the argument of the whole
@@ -298,6 +316,15 @@ The same shape repeats in the inference plane, one milestone later:
 **You cannot design an abstraction from a sample of one** — you can only describe that
 one. Which is why the second provider comes before the router, and not after it.
 
+And Milestone 9 is the third beat of that argument, arriving from an unexpected direction:
+
+- **M9 added no provider at all.** Claude was reachable the moment `BEDROCK_MODEL_ID` named
+  it. What it added was a *capability* — the model can act — and that forced changes to the
+  interface that a whole extra cloud provider had not.
+
+**The interesting thing about a new capability is rarely the thing it is filed under.**
+Milestone 9 was filed under "another provider". It turned out to be about **side effects**.
+
 ## What is not built
 
 Being explicit, because the [M1 target architecture](diagrams.md) shows a great deal
@@ -308,9 +335,9 @@ more than this:
 | n8n and OpenClaw **deployments** | ➡️ Not ours. Owned by [their own repositories](../../README.md#related-repositories). This one owns the **integrations** — the contracts, not the instances. |
 | The webhook handler that calls them | ❌ Not built (M12). `cmd/workflow` and `cmd/agent` are the reference callers in the meantime. |
 | Managed inference (Bedrock) | ✅ **Built (M8).** A second `llm.Provider`, switched by `LLM_PROVIDER`. Its IAM policy is opt-in and grants nothing by default. |
-| Hosted inference (Claude) | ❌ Not built (M9). The `llm.Provider` interface exists for it — and now has two implementations rather than one. |
-| **Hybrid routing** | ❌ Not built (M10). `Capabilities{Local, cost, context}` exists so a router has facts to route on — and, since M8, **two providers that answer it differently**. Today the choice is made once, at start-up, by an environment variable. |
-| **Failover** — Spot GPU interrupted → Bedrock | ❌ Not built (M10). Both halves now exist ([the interruption](../../infra/SPOT.md), and a managed provider); nothing yet *switches* between them mid-flight. |
+| Claude: reasoning, structured output, **tool use** | ✅ **Built (M9).** Through Bedrock, so no new provider and no new credential. The model can trigger a workflow and submit an agent task, inside a bounded loop. |
+| **Hybrid routing** | ❌ Not built (M10). `Capabilities` exists so a router has facts to route on — and since M9 it says what a model **can do**, not just what it costs, so the router must be **capability-aware first**: a schema routed to a model that cannot produce one does not fail, it invents. Today the choice is made once, at start-up, by an environment variable. |
+| **Failover** — Spot GPU interrupted → Bedrock | ❌ Not built (M10), and **harder than it looked at M8**. A conversation that has already run a `Write` tool cannot be replayed on another provider — replaying it would run the workflow again. This is a genuinely unsolved problem in the current design. |
 | RAG, vector store, prompt versioning | ❌ Not built. |
 | Any model inference **on our own hardware** | ❌ None. No GPU instance runs (cost + quota). Bedrock needs none — which is exactly its appeal, and exactly its bill. |
 | Auto Scaling group | ❌ Still **one** instance. The launch template is ready for it (M19). |
@@ -318,9 +345,9 @@ more than this:
 | Alarms + dashboards | ❌ Metrics and logs exist; nothing alerts on them (M15). |
 | Scheduled AMI rebuilds | ❌ Manual. A baked image gets staler every day. |
 
-The honest summary: **the platform can now orchestrate work, delegate it to an agent, and
-think for itself — on a model it runs, or a model AWS runs, switched by one environment
-variable.** What it still cannot do is *choose per request*: every inference in a given
+The honest summary: **the platform can now orchestrate work, delegate it to an agent, think
+for itself — on a model it runs or a model AWS runs — and let that model act on the platform
+itself, within bounds it cannot exceed.** What it still cannot do is *choose per request*: every inference in a given
 deployment goes to whichever provider was configured at start-up, whether or not that is
 the right one for **this** job. A 3B local model is excellent at summarising a diff and
 confidently wrong about whether an architecture is sound; the point of having two
