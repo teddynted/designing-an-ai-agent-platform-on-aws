@@ -4,9 +4,12 @@
 > is planned. Every milestone updates this file; if it disagrees with the code, the
 > file is wrong.
 >
-> **Last updated:** Milestone 4 — Custom AMIs.
-> **Deployed:** eight CloudFormation stacks + an image pipeline, in `dev`.
-> **Not deployed:** any AI workload. See [What is not built](#what-is-not-built).
+> **Last updated:** Milestone 5 — Self-hosted n8n Integration.
+> **Deployed:** eight CloudFormation stacks + an image pipeline, in `dev`, plus the
+> workflow-orchestration integration layer.
+> **Not deployed by this repository:** n8n itself (it lives in
+> [`self-hosted-n8n-on-aws`](../../README.md#related-repositories)), and any AI
+> workload. See [What is not built](#what-is-not-built).
 
 The other diagram sets are *snapshots* — each one froze at the milestone that wrote
 it, and they are kept that way on purpose, as the record of a decision:
@@ -17,6 +20,7 @@ it, and they are kept that way on purpose, as the record of a decision:
 | [infrastructure-diagrams.md](infrastructure-diagrams.md) | **M2** — the CloudFormation foundation. |
 | [spot-diagrams.md](spot-diagrams.md) | **M3** — Spot interruption handling. |
 | [ami-diagrams.md](ami-diagrams.md) | **M4** — the custom AMI pipeline. |
+| [n8n-diagrams.md](n8n-diagrams.md) | **M5** — the workflow-orchestration integration. |
 | **this file** | **Everything, as it exists today.** |
 
 ## 1. Runtime architecture
@@ -180,12 +184,13 @@ flowchart TB
     m2["M2 · CloudFormation<br/>VPC · IAM · EC2 · S3 · EventBridge · CloudWatch<br/>the instance is disposable"] --> m3
     m3["M3 · EC2 Spot<br/>~70% off + interruption handling<br/>drain agent + 5 rules + 2 Go Lambdas<br/>disposability is now SAFE"] --> m4
     m4["M4 · Custom AMIs<br/>76s → 6.2s boot · immutable images<br/>disposability is now CHEAP"] --> m5
+    m5["M5 · n8n integration<br/>the platform can now ORCHESTRATE<br/>trigger · authenticate · retry · correlate<br/>(n8n itself lives in another repository)"] --> m6
 
-    m5["M5 · n8n<br/>the first real workload"]:::next
+    m6["M6 · OpenClaw<br/>the agent that does the work"]:::next
 
     classDef done fill:#3F8624,stroke:#243B0B,color:#FFFFFF
     classDef next fill:#E8E8E8,stroke:#666,color:#232F3E,stroke-dasharray: 5 5
-    class m1,m2,m3,m4 done
+    class m1,m2,m3,m4,m5 done
 ```
 
 The dependency between them is not arbitrary, and it is the argument of the whole
@@ -206,7 +211,9 @@ more than this:
 
 | | Status |
 | --- | --- |
-| n8n, OpenClaw, Ollama | ❌ Not installed. The compute is empty. |
+| n8n **deployment** | ➡️ Not ours. Owned by [`self-hosted-n8n-on-aws`](../../README.md#related-repositories). This repository owns the **integration** — the contract, not the instance. |
+| The webhook handler that calls the integration | ❌ Not built (M12). `cmd/workflow` is the reference caller in the meantime. |
+| OpenClaw, Ollama | ❌ Not installed. The compute is still empty. |
 | Any model inference | ❌ None. No GPU instance runs (cost + quota). |
 | Bedrock / Claude routing | ❌ Not built. |
 | Auto Scaling group | ❌ Still **one** instance. The launch template is ready for it (M19). |
@@ -214,8 +221,9 @@ more than this:
 | Alarms + dashboards | ❌ Metrics and logs exist; nothing alerts on them (M15). |
 | Scheduled AMI rebuilds | ❌ Manual. A baked image gets staler every day. |
 
-The honest summary: **this is a well-built, empty platform.** Milestone 5 puts the
-first workload on it.
+The honest summary: **this is a well-built platform that can now ask for work to be
+done, but has nothing yet to do it with.** Milestone 5 gave it an orchestrator to
+delegate to; Milestone 6 gives it an agent that can actually act.
 
 ## Keeping this file current
 
