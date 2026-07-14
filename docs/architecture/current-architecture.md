@@ -4,11 +4,12 @@
 > is planned. Every milestone updates this file; if it disagrees with the code, the
 > file is wrong.
 >
-> **Last updated:** Milestone 6 — OpenClaw Integration.
-> **Deployed:** eight CloudFormation stacks + an image pipeline, in `dev`, plus two
-> integration layers — workflow orchestration (n8n) and agent execution (OpenClaw).
-> **Not deployed by this repository:** n8n and OpenClaw themselves (they live in
-> [their own repositories](../../README.md#related-repositories)), and any model. See
+> **Last updated:** Milestone 7 — Ollama Integration.
+> **Deployed:** eight CloudFormation stacks + an image pipeline, in `dev`, plus three
+> integration layers — workflow orchestration (n8n), agent execution (OpenClaw), and
+> inference (Ollama, behind a provider abstraction).
+> **Not deployed by this repository:** n8n, OpenClaw and Ollama themselves (they live in
+> [their own repositories](../../README.md#related-repositories)). See
 > [What is not built](#what-is-not-built).
 
 The other diagram sets are *snapshots* — each one froze at the milestone that wrote
@@ -22,6 +23,7 @@ it, and they are kept that way on purpose, as the record of a decision:
 | [ami-diagrams.md](ami-diagrams.md) | **M4** — the custom AMI pipeline. |
 | [n8n-diagrams.md](n8n-diagrams.md) | **M5** — the workflow-orchestration integration. |
 | [openclaw-diagrams.md](openclaw-diagrams.md) | **M6** — the agent-execution integration. |
+| [ollama-diagrams.md](ollama-diagrams.md) | **M7** — inference and the provider abstraction. |
 | **this file** | **Everything, as it exists today.** |
 
 ## 1. Runtime architecture
@@ -34,7 +36,7 @@ the same colour key.
 Note how little of it is an "AI platform" yet. This is a foundation with no workload
 on it, and the legend says so out loud rather than leaving you to infer it.
 
-![The platform as built after Milestone 6: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sit two component repositories the platform integrates with but does not deploy — self-hosted n8n for orchestration and OpenClaw for agent execution, the latter enforcing a budget and rejecting any output containing a credential; the platform itself calls no AI model.](platform-as-built.svg)
+![The platform as built after Milestone 7: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sit three component repositories the platform integrates with but does not deploy — self-hosted n8n for orchestration, OpenClaw for agentic execution (which calls its own model and whose output is untrusted), and Ollama for local inference, where the prompt never leaves the network; hosted inference and hybrid routing are not built yet.](platform-as-built.svg)
 
 The same thing as a flow view — useful for seeing the two independent paths out of
 an interruption (the instance saves its own work; the account merely watches):
@@ -71,7 +73,8 @@ flowchart TB
     ag["agent.Service → Runtime (M6)<br/>submit · track · retrieve · cancel<br/>budgets enforced · output validated"]
     n8n["self-hosted n8n<br/>ANOTHER REPOSITORY"]
     oc["OpenClaw<br/>ANOTHER REPOSITORY"]
-    model["AI model<br/>called by the AGENT,<br/>never by this platform"]
+    llm["llm.Service → Provider (M7)<br/>the platform's OWN inference<br/>validate · fit the context · log"]
+    ollama["Ollama<br/>ANOTHER REPOSITORY<br/>LOCAL — the prompt does not leave"]
 
     ec2 --- ebs
     subnet --> igw
@@ -85,7 +88,10 @@ flowchart TB
     wf -->|"HTTPS + token · idempotency key<br/>· sanitised payload"| n8n
     n8n -->|"orchestrates"| ag
     ag -->|"HTTPS + token · idempotency key<br/>· mandatory budget"| oc
-    oc --> model
+    oc -->|"the AGENT'S own model calls —<br/>the platform is NOT in this path"| ollama
+    n8n -->|"single-shot work:<br/>summarise · release notes"| llm
+    llm -->|"streaming · stall-detected<br/>· prompt never logged"| ollama
+    llm -.->|"structured logs"| cw
     oc -.->|"output — UNTRUSTED,<br/>validated before use"| ag
     wf -.->|"structured logs"| cw
     ag -.->|"structured logs"| cw
@@ -93,9 +99,9 @@ flowchart TB
     classDef aws fill:#FF9900,stroke:#232F3E,color:#232F3E
     classDef store fill:#3F8624,stroke:#243B0B,color:#FFFFFF
     classDef ext fill:#E8E8E8,stroke:#666,color:#232F3E
-    class ec2,l1,l2,dispatch,rules,defbus,platbus,wf,ag aws
+    class ec2,l1,l2,dispatch,rules,defbus,platbus,wf,ag,llm aws
     class s3,cw,ami,ebs store
-    class ssm,n8n,oc,model ext
+    class ssm,n8n,oc,ollama ext
 ```
 
 **The four facts this diagram is really carrying:**
@@ -112,9 +118,14 @@ flowchart TB
    the contracts. Neither integration has a **caller deployed yet**: the webhook handler
    is Milestone 12, so today they are exercised by
    [`cmd/workflow`](../../cmd/workflow), [`cmd/agent`](../../cmd/agent), and their tests.
-4. **The model is called by the agent, never by the platform.** That is why swapping
-   Claude for a local Ollama model is a change in `openclaw-on-aws` that this repository
-   does not notice — and why "inference" is still in [what is not built](#what-is-not-built).
+4. **There are now TWO consumers of inference, and they are different.** The *agent*
+   calls its own model, behind its own boundary — the platform is not in that path, and
+   swapping the agent's model remains a change in `openclaw-on-aws` that this repository
+   does not notice. Separately, the *platform* now runs its own **single-shot** inference
+   (M7): summarise a diff, write release notes — one prompt, one completion, no agent
+   needed. That is the inference plane, and it is
+   [a correction to what Milestone 6 said](../../INFERENCE.md#wait--milestone-6-said-the-platform-calls-no-model),
+   not a contradiction of it.
 
 ## 2. The stacks, and the one thing that is not a stack
 
@@ -155,18 +166,32 @@ is a pipeline concern, consuming is an infrastructure concern, and **the AMI ID 
 the interface between them.** Keeping that seam clean is why `03-compute` neither
 knows nor cares how its image was made.
 
-**And why n8n is not on this map at all.** It is neither a stack nor a script here —
-it is *another repository's deployment*. Milestone 5 added the integration
-([`internal/workflow`](../../internal/workflow), [`internal/n8n`](../../internal/n8n))
-and **zero AWS resources**. If an n8n stack ever appears in `infra/cloudformation`,
-the boundary this repository committed to has failed:
+**And why n8n, OpenClaw and Ollama are not on this map at all.** None of them is a
+stack or a script here — each is *another repository's deployment*. Milestones 5, 6 and
+7 added integrations and, between them, **zero AWS resources**:
+
+| Milestone | The integration (here) | The deployment (not here) |
+| --- | --- | --- |
+| M5 | [`internal/workflow`](../../internal/workflow) + [`internal/n8n`](../../internal/n8n) | `self-hosted-n8n-on-aws` |
+| M6 | [`internal/agent`](../../internal/agent) + [`internal/openclaw`](../../internal/openclaw) | `openclaw-on-aws` |
+| M7 | [`internal/llm`](../../internal/llm) + [`internal/ollama`](../../internal/ollama) | `ollama-on-aws` |
+
+If an n8n, OpenClaw or Ollama stack ever appears in `infra/cloudformation`, the boundary
+this repository committed to has failed:
 
 > *If a change affects more than one component, it belongs in the platform. If it
 > affects exactly one, it belongs in that component's repository.*
 
-An n8n version bump affects n8n. The shape of the JSON we send it affects everything
-that sends it — so the payload, the auth header, the retry policy and the idempotency
-key live here, and the servers do not.
+An n8n version bump affects n8n; a GPU driver on the Ollama host affects that host. But
+the shape of the JSON we send them, the auth, the retry policy, the idempotency key and
+the provider abstraction affect **everything that calls them** — so those live here, and
+the servers do not.
+
+Each integration is the same shape on purpose — a `Service` that validates, correlates,
+times and logs, over an interface (`Engine`, `Runtime`, `Provider`) with one
+implementation. None of the three core packages imports its own client:
+`workflow`↛`n8n`, `agent`↛`openclaw`, `llm`↛`ollama`. That is the mechanical test that
+the seams are real rather than decorative, and it is checked, not asserted.
 
 ## 3. The life of one instance
 
@@ -222,13 +247,14 @@ flowchart TB
     m3["M3 · EC2 Spot<br/>~70% off + interruption handling<br/>drain agent + 5 rules + 2 Go Lambdas<br/>disposability is now SAFE"] --> m4
     m4["M4 · Custom AMIs<br/>76s → 6.2s boot · immutable images<br/>disposability is now CHEAP"] --> m5
     m5["M5 · n8n integration<br/>the platform can now ORCHESTRATE<br/>trigger · authenticate · retry · correlate"] --> m6
-    m6["M6 · OpenClaw integration<br/>the platform can now DELEGATE WORK<br/>submit · track · cancel · budget · validate<br/>(orchestration is not execution)"] --> m7
+    m6["M6 · OpenClaw integration<br/>the platform can now DELEGATE WORK<br/>submit · track · cancel · budget · validate"] --> m7
+    m7["M7 · Ollama + provider abstraction<br/>the platform can now THINK, locally<br/>streaming · stall-detected · prompt never leaves<br/>(an errand is not a function call)"] --> m8
 
-    m7["M7 · Ollama<br/>the model the agent calls"]:::next
+    m8["M8 · Bedrock<br/>the same interface, hosted"]:::next
 
     classDef done fill:#3F8624,stroke:#243B0B,color:#FFFFFF
     classDef next fill:#E8E8E8,stroke:#666,color:#232F3E,stroke-dasharray: 5 5
-    class m1,m2,m3,m4,m5,m6 done
+    class m1,m2,m3,m4,m5,m6,m7 done
 ```
 
 The dependency between them is not arbitrary, and it is the argument of the whole
@@ -251,8 +277,9 @@ more than this:
 | --- | --- |
 | n8n and OpenClaw **deployments** | ➡️ Not ours. Owned by [their own repositories](../../README.md#related-repositories). This one owns the **integrations** — the contracts, not the instances. |
 | The webhook handler that calls them | ❌ Not built (M12). `cmd/workflow` and `cmd/agent` are the reference callers in the meantime. |
-| **Any model inference** | ❌ **This platform calls no model.** The agent does, behind the boundary (M7+). |
-| Ollama | ❌ Not installed. The compute is still empty. |
+| Hosted inference (Bedrock, Claude) | ❌ Not built (M8, M9). The `llm.Provider` interface exists for them. |
+| **Hybrid routing** | ❌ Not built (M10). `Capabilities{Local, cost, context}` exists so a router has facts to route on. |
+| RAG, vector store, prompt versioning | ❌ Not built. |
 | Any model inference | ❌ None. No GPU instance runs (cost + quota). |
 | Bedrock / Claude routing | ❌ Not built. |
 | Auto Scaling group | ❌ Still **one** instance. The launch template is ready for it (M19). |
@@ -260,11 +287,11 @@ more than this:
 | Alarms + dashboards | ❌ Metrics and logs exist; nothing alerts on them (M15). |
 | Scheduled AMI rebuilds | ❌ Manual. A baked image gets staler every day. |
 
-The honest summary: **this is a well-built platform that can now ask for work to be
-done, and hand it to something that can do it — but the thing that does it, and the
-model behind it, both live elsewhere.** Milestone 5 gave it an orchestrator; Milestone 6
-gave it an agent to delegate to. Milestone 7 gives that agent a model this platform
-actually runs.
+The honest summary: **the platform can now orchestrate work, delegate it to an agent,
+and think for itself — on a model it runs, with the prompt never leaving the network.**
+What it still cannot do is *choose*: every inference goes to the one local model, whether
+or not that is the right one for the job. Milestone 8 adds a hosted provider; Milestone
+10 is what decides between them.
 
 ## Keeping this file current
 
