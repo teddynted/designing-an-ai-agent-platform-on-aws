@@ -131,8 +131,10 @@ managed backstop are still ahead.
   capability.
 - **Spot-first inference** — GPU capacity on EC2 Spot, with a managed backstop so
   an interruption degrades latency rather than availability.
-- **Self-hosted workflow orchestration** — n8n as the durable orchestrator
-  between events, agents, and the outside world.
+- **Self-hosted workflow orchestration** — n8n as the durable orchestrator between
+  events, agents, and the outside world. *(The platform's side of this is
+  [built](#workflow-orchestration-with-n8n): it can trigger, authenticate, retry and
+  correlate. n8n itself is deployed by its own repository.)*
 - **Agent runtime** — OpenClaw as the agent execution environment, with a
   sandboxed filesystem and credential boundary.
 - **Loop engineering** — explicit control over how an agent iterates, when it
@@ -225,7 +227,7 @@ and most of it (n8n, OpenClaw, Ollama, Bedrock routing) is still unbuilt.
 The diagram above is the **target**. This is the **present** — the same AWS service
 view, drawn for what really exists in the account today:
 
-![The platform as built after Milestone 4: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager, there is no inbound access, and no AI workload is deployed.](docs/architecture/platform-as-built.svg)
+![The platform as built after Milestone 5: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sits self-hosted n8n, deployed by a separate repository, which the platform triggers over HTTPS with a token, an idempotency key and a sanitised payload; no AI workload is deployed.](docs/architecture/platform-as-built.svg)
 
 > 🗺️ **[The Platform As Built](docs/architecture/current-architecture.md)** — the
 > living diagram set (runtime topology, stack map, the life of one instance),
@@ -761,15 +763,16 @@ affects exactly one, it belongs in that component's repository.
 
 ## Related Repositories
 
-None of these are wired to this repository yet. The integration milestones below
-establish the contracts.
+The integration milestones establish the contracts. **One is now wired:** the
+platform can trigger n8n workflows ([Milestone 5](#workflow-orchestration-with-n8n))
+— though this repository still does not *deploy* n8n, and never will.
 
-| Repository | Purpose | Integrated at |
-| --- | --- | --- |
-| `self-hosted-n8n-on-aws` | Deploys the n8n workflow engine on AWS | [M5](#milestone-5--self-hosted-n8n-integration) |
-| `openclaw-on-aws` | Deploys the OpenClaw agent runtime on AWS | [M6](#milestone-6--openclaw-integration) |
-| `ollama-on-aws` | Deploys Ollama inference nodes on AWS | [M7](#milestone-7--ollama-integration) |
-| `ai-github-repository-blog-generator` | An agent that reads a repository and drafts a technical post | [M13](#milestone-13--ai-github-repository-blog-generator-integration) |
+| Repository | Purpose | Integrated at | Status |
+| --- | --- | --- | --- |
+| `self-hosted-n8n-on-aws` | Deploys the n8n workflow engine on AWS | [M5](#milestone-5--self-hosted-n8n-integration) | ✅ **Wired** — see [WORKFLOWS.md](WORKFLOWS.md) |
+| `openclaw-on-aws` | Deploys the OpenClaw agent runtime on AWS | [M6](#milestone-6--openclaw-integration) | 📋 Planned |
+| `ollama-on-aws` | Deploys Ollama inference nodes on AWS | [M7](#milestone-7--ollama-integration) | 📋 Planned |
+| `ai-github-repository-blog-generator` | An agent that reads a repository and drafts a technical post | [M13](#milestone-13--ai-github-repository-blog-generator-integration) | 📋 Planned |
 
 ## Roadmap
 
