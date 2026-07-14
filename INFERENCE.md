@@ -52,8 +52,9 @@ and
 - [A retry WAS safe here — Milestone 9 withdrew that](#a-retry-was-safe-here--milestone-9-withdrew-that)
 - [Tool use: the model chooses, it never authors](#tool-use-the-model-chooses-it-never-authors)
 - [Structured output](#structured-output)
+- [Artefacts: YAML, Mermaid, tables — validated before anyone believes them](#artefacts-yaml-mermaid-tables--validated-before-anyone-believes-them)
 - [Reasoning, and what it costs](#reasoning-and-what-it-costs)
-- [Prompts are code](#prompts-are-code)
+- [Prompts are code, organised by capability](#prompts-are-code-organised-by-capability)
 - [The silent-truncation trap](#the-silent-truncation-trap)
 - [Configuration](#configuration)
 - [Example request and response](#example-request-and-response)
@@ -686,6 +687,61 @@ prompt is what needs fixing, not the retry count.
 *(On Bedrock, structured output **is** tool use: one tool, whose schema is the object you
 want, and the model is forced to call it. So prose is not an option available to it.)*
 
+## Artefacts: YAML, Mermaid, tables — validated before anyone believes them
+
+`Structured[T]` gives you a typed value. But a lot of what a platform actually wants from a
+frontier model is an **artefact**: a YAML config, a Mermaid diagram, a Markdown document, a
+table. Those are not types, and they fail differently.
+
+```go
+content, res, err := svc.Compose(ctx, req, format.For(format.Mermaid))
+```
+
+> **A generation that produced invalid YAML is a FAILED generation.**
+
+That sentence is the whole design. The alternative — return the text and let a caller find
+out later — pushes the failure into a component that did nothing wrong, at a time when the
+model is no longer around to fix it:
+
+| The model produces | Where it actually breaks |
+| --- | --- |
+| YAML with a tab | **At deploy.** Hours later, in CloudFormation. |
+| An invalid Mermaid diagram | **On a rendered page.** The first person to notice is a reader. |
+| A table with one extra cell | **Never, visibly.** It renders. Slightly wrong. Forever. |
+| JSON with a trailing comma | **A 500** in whatever parses it next. |
+
+In every case the log said `inference completed`, the tokens were paid for, and the fault
+surfaced somewhere else. So validation happens **at the boundary**, while the output is still
+the model's and while there is still context to do the obvious thing: show the model its own
+mistake and ask again, **once**.
+
+```bash
+go run ./cmd/llm compose --template architecture/mermaid-diagram --format mermaid     --var Subject="the tool loop"
+```
+
+```
+--- bedrock · claude-sonnet-4 · architecture/mermaid-diagram (9d6ee6fc) · format: mermaid ---
+WARN the model produced an invalid artefact; asking it to repair
+     format=mermaid error=""call" is a reserved word in Mermaid and cannot be a node ID"
+flowchart TB
+    invoke["bedrock:InvokeModel"] --> gate1{"IAM?"}
+--- 300 in / 60 out · MERMAID VALIDATED ---
+```
+
+### Two things worth knowing about it
+
+**Models wrap things.** Asked for JSON, a model says *"Here is the JSON you asked for:"*, then
+a fenced block, then *"Let me know if you'd like me to change anything!"* All three are
+helpful and none of them parse. `Clean` unwraps the fenced block — except for Markdown, where
+unwrapping would return the first code sample instead of the document.
+
+**The Mermaid validator is not a Mermaid parser**, and says so. It catches the mistakes that
+have actually broken a diagram *in this repository*: a reserved word used as a node ID
+(`call` is tokenised as `CALLBACKNAME`), a semicolon inside a `sequenceDiagram` note (it
+terminates the statement), a missing diagram type, unbalanced brackets. Every one of those
+fails **silently**, as a red box on a page. A validator that over-promises is worse than one
+whose limits are written down, because people stop checking.
+
 ## Reasoning, and what it costs
 
 ```bash
@@ -714,16 +770,34 @@ complete description of itself).
 And do not turn it on for everything. For *"summarise this diff"* it buys nothing and costs
 several times the price.
 
-## Prompts are code
+## Prompts are code, organised by capability
 
 Prompts live in [`internal/prompt/templates/`](internal/prompt/templates), not in string
-literals:
+literals — and the **directory is the taxonomy**:
+
+```
+templates/
+  summarisation/   diff-summary · release-notes
+  structured/      change-triage · workflow-decision
+  architecture/    explain · mermaid-diagram
+  writing/         technical-doc
+  workflow/        tool-use-system        ← the system prompt for a model that can ACT
+```
 
 ```go
-p := prompt.MustLoad("tool-use-system")
-system, err := p.Render(map[string]any{"Repository": repo, "Branch": branch})
-// p.Version == "18bf2ff4f527"
+p := prompt.MustLoad("architecture/mermaid-diagram")
+p.Apply(&req, data)   // stamps Name, Category and Version onto the request
 ```
+
+Organising by **capability** rather than by caller is deliberate. A prompt called
+`blog-generator-step-3` belongs to one workflow and dies with it. A prompt called
+`summarisation/diff-summary` is a thing the platform can *do* — and the next caller that
+needs a diff summarised will find it instead of writing a fifth one.
+
+`promptCategory` is on every log line, and it is the field people underestimate: `purpose`
+says *which caller asked*, and `promptCategory` says *which capability was used*. The
+difference is between "the blog workflow is expensive" and "**summarisation** is expensive,
+everywhere, and that is where an optimisation would actually pay".
 
 - **Reviewable.** A prompt change is a behaviour change and should arrive in a pull
   request looking like one.
@@ -796,6 +870,7 @@ is billed in full for an answer to a question it only half read.
 | `BEDROCK_TOOLS` *(M9)* | | *(Claude → true)* | Can this model call tools? Inferred from the model ID, because **Bedrock will not tell you**. |
 | `BEDROCK_REASONING` *(M9)* | | *(Claude → true)* | Extended thinking. |
 | `BEDROCK_PROMPT_CACHE` *(M9)* | | `false` | Cache the stable prefix (system prompt + tool schemas). **In a tool loop this is most of the bill.** |
+| `BEDROCK_TOP_P` *(M9)* | | *(unset)* | Nucleus sampling, `[0, 1]`. **Unset on purpose:** TopP and temperature are two knobs on the same distribution, and Anthropic's guidance is to tune one. A platform that shipped a default for both would be pulling the model in two directions on every request. |
 | ~~`BEDROCK_API_KEY`~~ | | — | **Does not exist.** See [Authentication](#authentication-there-is-no-credential). |
 
 **Ollama (M7).**
@@ -1041,10 +1116,29 @@ milestone built.
 ## Testing
 
 ```bash
-go test ./internal/llm/ ./internal/ollama/ ./internal/bedrock/ ./internal/providers/
+make test              # unit: NOTHING here touches AWS. Milliseconds. No credentials.
+make test-integration  # REAL Bedrock. Costs money. Needs model access. Opt-in.
 ```
 
-**No test touches AWS.** Not with a credential, not with a real region, not "just the
+The two tiers answer different questions, and conflating them is how a test suite rots.
+
+**Unit tests prove the platform's logic** — that a `ThrottlingException` becomes
+`llm.ErrThrottled`, that an oversized prompt is refused, that a `Write` tool's failure is not
+retried. They prove all of it against a fake, which means they prove it against *my belief
+about what Bedrock does*.
+
+**Integration tests check that belief.** They are the only thing standing between this
+integration and a subtly wrong assumption about the real API: a stop reason that is not what
+I think, a tool-result shape that changed, a model that no longer exists in the region. A
+small number of very valuable assertions — including the one that would have caught the
+Smithy-document bug, because it asserts on the tool call's **arguments** and not merely on its
+name.
+
+They are behind a `//go:build integration` tag because **a unit test that calls Bedrock is not
+a unit test**: it fails on an aeroplane, costs money on every push, turns a code review into a
+permissions ticket, and goes red because somebody else exhausted the account's quota.
+
+**No unit test touches AWS.** Not with a credential, not with a real region, not "just the
 cheap model". A unit test that calls Bedrock is a unit test that fails on an aeroplane,
 costs money in CI, and turns a code review into a permissions ticket.
 

@@ -41,6 +41,8 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+
+	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/llm"
 )
 
 // ErrNotFound means there is no such prompt.
@@ -50,13 +52,46 @@ var ErrNotFound = errors.New("no such prompt")
 // does not have.
 var ErrRender = errors.New("the prompt could not be rendered")
 
-//go:embed templates/*.md
+//go:embed templates/*/*.md
 var files embed.FS
+
+// Categories are the platform's prompt CAPABILITIES, and the directory layout is the
+// taxonomy — there is no registry to fall out of sync with the files.
+//
+// Organising by capability rather than by caller is deliberate. A prompt named
+// "blog-generator-step-3" belongs to one workflow and dies with it; a prompt named
+// "summarisation/diff-summary" is a thing the platform can DO, and the next caller that
+// needs a diff summarised will find it instead of writing a fifth one.
+const (
+	// Summarisation — diffs, commits, events. The platform's most common inference.
+	Summarisation = "summarisation"
+
+	// Structured — prompts whose answer is data, not prose. Paired with llm.Structured.
+	Structured = "structured"
+
+	// Architecture — explanations and diagrams.
+	Architecture = "architecture"
+
+	// Writing — technical documentation and long-form prose.
+	Writing = "writing"
+
+	// Workflow — system prompts for the tool-using assistant. These are the prompts that
+	// govern a model which can ACT, and they are the ones to read most carefully.
+	Workflow = "workflow"
+)
 
 // Prompt is one versioned instruction to a model.
 type Prompt struct {
-	// Name is the file name without its extension: "diff-summary".
+	// Name is the qualified name: "summarisation/diff-summary".
 	Name string
+
+	// Category is the capability it belongs to: "summarisation".
+	//
+	// It is logged on every inference as promptCategory, which is what makes "what is this
+	// platform spending its tokens on?" answerable by CAPABILITY and not merely by caller —
+	// the difference between "the blog workflow costs a lot" and "summarisation costs a
+	// lot, everywhere, and that is where an optimisation would pay".
+	Category string
 
 	// Version is the first twelve hex characters of the SHA-256 of the template.
 	//
@@ -78,6 +113,12 @@ func Load(name string) (Prompt, error) {
 		return Prompt{}, fmt.Errorf("%w: %q (available: %s)", ErrNotFound, name, strings.Join(Names(), ", "))
 	}
 
+	category, _, ok := strings.Cut(name, "/")
+	if !ok {
+		return Prompt{}, fmt.Errorf("%w: %q has no category — prompts are organised by "+
+			"capability, e.g. %q", ErrNotFound, name, "summarisation/diff-summary")
+	}
+
 	text := strings.TrimSpace(string(raw))
 
 	// Option("missingkey=error") is the whole reason this is a package and not a call to
@@ -93,10 +134,11 @@ func Load(name string) (Prompt, error) {
 
 	sum := sha256.Sum256([]byte(text))
 	return Prompt{
-		Name:    name,
-		Version: hex.EncodeToString(sum[:])[:12],
-		Text:    text,
-		tmpl:    tmpl,
+		Name:     name,
+		Category: category,
+		Version:  hex.EncodeToString(sum[:])[:12],
+		Text:     text,
+		tmpl:     tmpl,
 	}, nil
 }
 
@@ -120,7 +162,7 @@ func (p Prompt) Render(data any) (string, error) {
 
 // Names lists every prompt in the library.
 func Names() []string {
-	entries, err := fs.Glob(files, "templates/*.md")
+	entries, err := fs.Glob(files, "templates/*/*.md")
 	if err != nil {
 		return nil
 	}
@@ -130,6 +172,20 @@ func Names() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// InCategory lists the prompts for one capability.
+func InCategory(category string) []Prompt {
+	var out []Prompt
+	for _, name := range Names() {
+		if !strings.HasPrefix(name, category+"/") {
+			continue
+		}
+		if p, err := Load(name); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // All loads every prompt. It exists so a test can assert that they all parse — which is
@@ -145,4 +201,38 @@ func All() ([]Prompt, error) {
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// Apply renders a prompt and stamps its identity onto a request.
+//
+// It exists so that no caller ever has to remember to copy three fields by hand — and so
+// that an inference whose prompt came from this library is ALWAYS traceable back to it. A
+// prompt whose version reaches the model but not the log is a prompt you cannot debug.
+func (p Prompt) Apply(req *llm.Request, data any) error {
+	text, err := p.Render(data)
+	if err != nil {
+		return err
+	}
+	req.Prompt = text
+	req.PromptName = p.Name
+	req.PromptCategory = p.Category
+	req.PromptVersion = p.Version
+	return nil
+}
+
+// System renders a prompt into the request's SYSTEM field instead.
+//
+// The distinction matters and it is the platform's oldest security rule: the system prompt
+// is the PLATFORM speaking, and the user turn is where content goes. Repository content must
+// never be rendered into a system prompt — that is how a diff becomes an instruction.
+func (p Prompt) System(req *llm.Request, data any) error {
+	text, err := p.Render(data)
+	if err != nil {
+		return err
+	}
+	req.System = text
+	req.PromptName = p.Name
+	req.PromptCategory = p.Category
+	req.PromptVersion = p.Version
+	return nil
 }

@@ -335,6 +335,15 @@ type Options struct {
 	// ramble for as long as it likes on hardware you are paying for by the hour.
 	MaxTokens int
 
+	// TopP is nucleus sampling: consider only the tokens whose cumulative probability
+	// reaches P. Zero means the provider's default.
+	//
+	// Set this OR Temperature, not both. They are two knobs on the same thing, and
+	// Anthropic's own guidance is to tune one and leave the other alone — a model given
+	// both is being pulled in two directions by someone who has usually only thought about
+	// one of them.
+	TopP float64
+
 	// Stop sequences end generation early.
 	Stop []string
 
@@ -395,9 +404,16 @@ type Request struct {
 	// "summarise this diff", where it buys nothing and costs several times the price.
 	Reasoning *ReasoningConfig
 
-	// PromptVersion identifies the prompt that produced this request, so a log line can
-	// answer "which version of the prompt wrote this?". See internal/prompt.
-	PromptVersion string
+	// PromptName, PromptCategory and PromptVersion identify the prompt that produced this
+	// request. See internal/prompt.
+	//
+	// The CATEGORY is the one people underestimate. `purpose` says which caller asked;
+	// `promptCategory` says which CAPABILITY was used — and the difference is between
+	// "the blog workflow is expensive" and "summarisation is expensive, everywhere, and
+	// that is where an optimisation would actually pay".
+	PromptName     string
+	PromptCategory string
+	PromptVersion  string
 }
 
 // ReasoningConfig turns on extended thinking.

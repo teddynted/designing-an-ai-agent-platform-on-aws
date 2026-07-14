@@ -269,3 +269,37 @@ func TestTheInferencePlaneDoesNotKnowWhatAToolDoes(t *testing.T) {
 		}
 	}
 }
+
+// TestTheInferencePlaneDoesNotKnowWhatYAMLIs guards the last seam Milestone 9 added.
+//
+// Service.Compose validates a model's artefact before returning it — so it would be entirely
+// natural for internal/llm to import internal/format and call format.Validate(format.YAML, …).
+// One import, three fewer lines, and the inference plane has permanently acquired a YAML
+// parser and an opinion about Mermaid's grammar.
+//
+// It must not. `llm` declares [llm.Formatter] — Clean, Validate, Name — and knows nothing
+// else. `format` implements it. The dependency points inward, exactly as it does for
+// Provider (ollama, bedrock) and ToolRunner (tools), and the reward is that the whole repair
+// loop is testable against a fake formatter with no YAML anywhere near it.
+func TestTheInferencePlaneDoesNotKnowWhatYAMLIs(t *testing.T) {
+	deps := transitiveImports(t, module+"llm")
+
+	if deps[module+"format"] {
+		t.Error("internal/llm imports internal/format.\n\n" +
+			"The inference plane must not learn what YAML is. It declares llm.Formatter\n" +
+			"(Clean, Validate, Name) and knows nothing else; internal/format implements it.\n" +
+			"The arrow points inward — the same rule as Provider and ToolRunner.")
+	}
+
+	// format is a LEAF, and that is what makes it safe to depend on. It must not reach back
+	// into the platform: a validator that imported llm could not be used by anything else,
+	// and a validator that imported a vendor would be a validator with an opinion about who
+	// generated the artefact — which is precisely what it must not have.
+	formatDeps := transitiveImports(t, module+"format")
+	for dep := range formatDeps {
+		if len(dep) > len(module) && dep[:len(module)] == module {
+			t.Errorf("internal/format imports %s — it is a leaf. It validates bytes, and it "+
+				"must not care who produced them", dep)
+		}
+	}
+}

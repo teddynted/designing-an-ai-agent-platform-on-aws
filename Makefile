@@ -10,7 +10,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
 .DEFAULT_GOAL := help
-.PHONY: help build install test cover vet fmt fmt-check verify dist clean \
+.PHONY: help build install test test-integration cover vet fmt fmt-check verify dist clean \
         check release-patch release-minor release-major
 
 help: ## Show this help
@@ -24,8 +24,13 @@ build: ## Build the release CLI into bin/
 install: ## Install the release CLI into GOBIN
 	go install -trimpath -ldflags '$(LDFLAGS)' $(PKG)
 
-test: ## Run the tests with the race detector
+test: ## Run the tests with the race detector (NO AWS: nothing here touches the cloud)
 	go test -race ./...
+
+test-integration: ## Run the tests that talk to REAL Bedrock (costs money; needs credentials)
+	@echo "These call Amazon Bedrock. They cost money and need model access."
+	@echo "Set BEDROCK_MODEL_ID and have AWS credentials, or they skip."
+	go test -tags=integration -count=1 -v ./internal/bedrock/
 
 cover: ## Run the tests and open a coverage report
 	go test -race -coverprofile=coverage.out ./...

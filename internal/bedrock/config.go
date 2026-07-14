@@ -65,6 +65,9 @@ const (
 	EnvRetryAttempts = "BEDROCK_RETRY_ATTEMPTS"
 	EnvRetryDelay    = "BEDROCK_RETRY_DELAY"
 
+	// EnvTopP is nucleus sampling. Unset by default — see Config.TopP.
+	EnvTopP = "BEDROCK_TOP_P"
+
 	// EnvStream selects streaming by default.
 	EnvStream = "BEDROCK_STREAM"
 
@@ -146,6 +149,14 @@ type Config struct {
 	Temperature   float64
 	Stream        bool
 	PromptCache   bool
+
+	// TopP is nucleus sampling, and it is ZERO (unset) by default on purpose.
+	//
+	// Temperature and TopP are two knobs on the same distribution. Anthropic's own guidance
+	// is to tune one of them and leave the other at its default — so a platform that shipped
+	// a non-zero default for both would be pulling the model in two directions on every
+	// request, and nobody would ever be able to say which knob was doing what.
+	TopP float64
 
 	// Tools and Reasoning are what this model can DO. Inferred from the model ID
 	// (Claude can; most others cannot do all of it) and overridable.
@@ -234,6 +245,12 @@ func ConfigFromEnv() (Config, error) {
 	}
 	if cfg.PromptCache, err = envBool(EnvPromptCache, false); err != nil {
 		return Config{}, err
+	}
+	if cfg.TopP, err = envFloat(EnvTopP, 0); err != nil {
+		return Config{}, err
+	}
+	if cfg.TopP < 0 || cfg.TopP > 1 {
+		return Config{}, fmt.Errorf("%w: %s must be in [0, 1], got %.2f", ErrConfig, EnvTopP, cfg.TopP)
 	}
 	if cfg.Stream, err = envBool(EnvStream, true); err != nil {
 		return Config{}, err
@@ -326,10 +343,20 @@ func (c Config) Redacted() map[string]any {
 		"awsSdkRetries":   "(disabled — this integration owns the retry policy)",
 		"inputCostPer1M":  c.InputCostPer1M,
 		"outputCostPer1M": c.OutputCostPer1M,
+		"topP":            orDefault(c.TopP),
 		"tools":           c.Tools,
 		"reasoning":       c.Reasoning,
 		"promptCache":     c.PromptCache,
 	}
+}
+
+// orDefault shows an unset numeric knob as what it actually is, rather than as 0 — which
+// would read as "TopP is zero" when it means "TopP is not in play at all".
+func orDefault(f float64) any {
+	if f == 0 {
+		return "(unset — tune temperature OR topP, not both)"
+	}
+	return f
 }
 
 func orNone(s string) string {

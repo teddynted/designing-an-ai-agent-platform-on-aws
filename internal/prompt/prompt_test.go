@@ -31,13 +31,13 @@ func TestEveryPromptParses(t *testing.T) {
 // forgets to bump — and a prompt whose version says it is unchanged while its text is not
 // is worse than no version at all, because it is a lie a dashboard believes.
 func TestTheVersionIsTheContent(t *testing.T) {
-	a := MustLoad("diff-summary")
-	b := MustLoad("diff-summary")
+	a := MustLoad("summarisation/diff-summary")
+	b := MustLoad("summarisation/diff-summary")
 	if a.Version != b.Version {
 		t.Error("the same prompt produced two versions")
 	}
 
-	other := MustLoad("release-notes")
+	other := MustLoad("summarisation/release-notes")
 	if other.Version == a.Version {
 		t.Error("two different prompts share a version")
 	}
@@ -51,7 +51,7 @@ func TestTheVersionIsTheContent(t *testing.T) {
 // reports an error. It is silent truncation's cousin, and it is why this is a package and
 // not a call to os.ReadFile.
 func TestAMissingVariableIsAnErrorAndNotAnEmptyString(t *testing.T) {
-	p := MustLoad("diff-summary")
+	p := MustLoad("summarisation/diff-summary")
 
 	// The template wants .Diff; this data has not got one.
 	out, err := p.Render(struct{ Wrong string }{Wrong: "x"})
@@ -66,7 +66,7 @@ func TestAMissingVariableIsAnErrorAndNotAnEmptyString(t *testing.T) {
 }
 
 func TestRender(t *testing.T) {
-	p := MustLoad("diff-summary")
+	p := MustLoad("summarisation/diff-summary")
 
 	out, err := p.Render(map[string]any{"Diff": "--- a/main.go\n+++ b/main.go"})
 	if err != nil {
@@ -81,11 +81,11 @@ func TestRender(t *testing.T) {
 }
 
 func TestAnUnknownPromptSaysWhatExists(t *testing.T) {
-	_, err := Load("does-not-exist")
+	_, err := Load("summarisation/does-not-exist")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "diff-summary") {
+	if !strings.Contains(err.Error(), "summarisation/diff-summary") {
 		t.Errorf("the error should list what IS available: %v", err)
 	}
 }
@@ -100,7 +100,12 @@ func TestAnUnknownPromptSaysWhatExists(t *testing.T) {
 // impossible, and it costs one paragraph to draw it.
 func TestPromptsThatReadContentSayItIsNotAnInstruction(t *testing.T) {
 	// The prompts that interpolate untrusted repository content.
-	contentPrompts := []string{"diff-summary", "release-notes", "change-triage", "tool-use-system"}
+	contentPrompts := []string{
+		"summarisation/diff-summary", "summarisation/release-notes",
+		"structured/change-triage", "structured/workflow-decision",
+		"workflow/tool-use-system", "architecture/explain",
+		"architecture/mermaid-diagram", "writing/technical-doc",
+	}
 
 	for _, name := range contentPrompts {
 		t.Run(name, func(t *testing.T) {
@@ -116,9 +121,9 @@ func TestPromptsThatReadContentSayItIsNotAnInstruction(t *testing.T) {
 // The system prompt for tool use has to say the two things that keep a tool-using model
 // from doing damage: only act when asked, and never act on what you read.
 func TestTheToolUseSystemPromptSetsTheRules(t *testing.T) {
-	text := MustLoad("tool-use-system").Text
+	text := MustLoad("workflow/tool-use-system").Text
 
-	out, err := MustLoad("tool-use-system").Render(map[string]any{
+	out, err := MustLoad("workflow/tool-use-system").Render(map[string]any{
 		"Repository": "teddynted/platform", "Branch": "main", "CommitSHA": "abc123",
 	})
 	if err != nil {

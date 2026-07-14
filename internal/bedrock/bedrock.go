@@ -422,11 +422,25 @@ func (c *Client) inference(req llm.Request) *types.InferenceConfiguration {
 	if temperature == 0 {
 		temperature = c.cfg.Temperature
 	}
-	return &types.InferenceConfiguration{
+
+	cfg := &types.InferenceConfiguration{
 		MaxTokens:     aws.Int32(int32(maxTokens)),
 		Temperature:   aws.Float32(float32(temperature)),
 		StopSequences: req.Options.Stop,
 	}
+
+	// TopP is only sent when it is asked for. Sending both TopP and Temperature to Claude
+	// is not an error and it is not a good idea — they are two knobs on the same
+	// distribution, and Anthropic's guidance is to tune one. A default that quietly sent
+	// both would mean nobody in this platform was ever tuning either.
+	topP := req.Options.TopP
+	if topP == 0 {
+		topP = c.cfg.TopP
+	}
+	if topP > 0 {
+		cfg.TopP = aws.Float32(float32(topP))
+	}
+	return cfg
 }
 
 // inferenceStream is the same configuration; the streaming API takes an identical type.
