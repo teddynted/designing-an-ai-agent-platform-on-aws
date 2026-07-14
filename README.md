@@ -5,7 +5,8 @@
 [![Milestone 2](https://img.shields.io/badge/M2%20CloudFormation-shipped-brightgreen)](docs/blog/provisioning-an-ai-agent-platform-with-cloudformation.md)
 [![Milestone 3](https://img.shields.io/badge/M3%20EC2%20Spot-shipped-brightgreen)](docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md)
 [![Milestone 4](https://img.shields.io/badge/M4%20Custom%20AMIs-shipped-brightgreen)](docs/blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md)
-[![Next milestone](https://img.shields.io/badge/next-M5%20n8n-lightgrey)](#milestone-5--self-hosted-n8n-integration)
+[![Milestone 5](https://img.shields.io/badge/M5%20n8n%20Integration-shipped-brightgreen)](docs/blog/using-n8n-as-the-workflow-engine-for-ai-automation.md)
+[![Next milestone](https://img.shields.io/badge/next-M6%20OpenClaw-lightgrey)](#milestone-6--openclaw-integration)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -13,9 +14,10 @@
 > The foundation is real: the AWS infrastructure is
 > [CloudFormation you can deploy](infra/), it runs its compute on
 > [EC2 Spot with interruption handling](infra/SPOT.md), and that compute boots from
-> a [custom AMI in 2.5 seconds](infra/AMI.md) instead of 76. Everything from
-> [Milestone 5](#milestone-5--self-hosted-n8n-integration) on is still a statement
-> of intent — no application software (OpenClaw, Ollama, n8n) runs yet. See
+> a [custom AMI in 2.5 seconds](infra/AMI.md) instead of 76, and the platform can now
+> [orchestrate work through self-hosted n8n](WORKFLOWS.md). Everything from
+> [Milestone 6](#milestone-6--openclaw-integration) on is still a statement of intent
+> — no agent runs and no model is called yet. See
 > [What exists today](#what-exists-today), which is kept honest.
 
 An open design study and reference implementation for running **autonomous AI
@@ -34,6 +36,7 @@ on a repository, and how to keep the bill and the blast radius small.
 - [High-Level Architecture Overview](#high-level-architecture-overview)
 - [Cost optimization with EC2 Spot](#cost-optimization-with-ec2-spot)
 - [Startup optimization with custom AMIs](#startup-optimization-with-custom-amis)
+- [Workflow orchestration with n8n](#workflow-orchestration-with-n8n)
 - [Technology Stack](#technology-stack)
 - [Repository Scope](#repository-scope)
 - [Related Repositories](#related-repositories)
@@ -102,7 +105,8 @@ Being explicit, because everything else on this page is aspirational:
 | AWS infrastructure | ✅ **Implemented** | [Milestone 2](#milestone-2--cloudformation-infrastructure): VPC, IAM, EC2, S3, EventBridge, CloudWatch — eight CloudFormation stacks, deployed by CI. See [infra/](infra/) |
 | EC2 Spot + interruption handling | ✅ **Implemented** | [Milestone 3](#milestone-3--ec2-spot-instances): a drain agent on the instance, EventBridge rules and Go Lambdas in the account. See [infra/SPOT.md](infra/SPOT.md) |
 | Custom AMIs + fast startup | ✅ **Implemented** | [Milestone 4](#milestone-4--custom-amis): a versioned image pipeline. Boot measured at **2.5s**, down from **76s**. See [infra/AMI.md](infra/AMI.md) |
-| Application software (OpenClaw, Ollama, n8n) | 📋 Planned | Nothing is installed on the instance yet — [Milestone 5](#milestone-5--self-hosted-n8n-integration) onwards |
+| Workflow orchestration (n8n) | ✅ **Implemented** | [Milestone 5](#milestone-5--self-hosted-n8n-integration): the **integration** — trigger, authenticate, retry, correlate. n8n itself is deployed by [`self-hosted-n8n-on-aws`](#related-repositories). See [WORKFLOWS.md](WORKFLOWS.md) |
+| Agent runtime, inference (OpenClaw, Ollama) | 📋 Planned | Nothing runs on the instance yet — [Milestone 6](#milestone-6--openclaw-integration) onwards |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -541,6 +545,142 @@ Deliberately **not** built in this milestone:
 - **Image signing / attestation**, so a deploy can prove the image is one this
   pipeline built.
 
+## Workflow orchestration with n8n
+
+**Milestone 5.** The platform delegates its slow, multi-step work — read a repo,
+draft a post with a model, open a PR, wait for review, publish, announce — to
+**self-hosted n8n**.
+
+> 📄 [Using n8n as the Workflow Engine for AI Automation](docs/blog/using-n8n-as-the-workflow-engine-for-ai-automation.md) — the blog post ·
+> 📐 [Diagrams](docs/architecture/n8n-diagrams.md) ·
+> 🛠️ [WORKFLOWS.md](WORKFLOWS.md) — the integration reference
+
+> ⚠️ **This repository does not deploy n8n.** Its infrastructure lives in
+> [`self-hosted-n8n-on-aws`](#related-repositories), which owns the servers, the
+> database, the version and the backups. This repository owns the **contract**: the
+> payload, the auth, the retries, the errors. An n8n version bump affects n8n; the
+> shape of the JSON we send affects everything that sends it.
+
+### The request flow
+
+```mermaid
+flowchart LR
+    gh(["GitHub webhook"]) --> app["Platform"]
+    app --> svc["workflow.Service<br/>validate · correlate · time · log"]
+    svc --> eng{{"workflow.Engine<br/>(interface)"}}
+    eng --> n8nc["n8n.Client<br/>auth · retry · idempotency · sanitise"]
+    n8nc -->|"HTTPS + token"| inst["self-hosted n8n<br/>(other repository)"]
+    inst --> exec["Workflow execution"]
+    svc -.-> cw["CloudWatch Logs"]
+    eng -.-> future["a future engine<br/>Step Functions? Temporal?"]
+
+    classDef aws fill:#FF9900,stroke:#232F3E,color:#232F3E
+    classDef store fill:#3F8624,stroke:#243B0B,color:#FFFFFF
+    classDef ext fill:#E8E8E8,stroke:#666,color:#232F3E
+    classDef future fill:#FFF,stroke:#999,stroke-dasharray: 5 5,color:#666
+    class app,svc,eng,n8nc aws
+    class cw store
+    class gh,inst,exec ext
+    class future future
+```
+
+**Why there is an interface in the middle.** The obvious design is to POST to n8n's
+webhook URL from the handler. It works, and it welds the platform to n8n: every
+caller learns the URL scheme, the auth header, the retry policy, and the response
+shape. The `Service` does what must be identical for *every* engine (validate,
+correlate, time, log — otherwise no dashboard can span them); the `Engine` does what
+is specific and replaceable.
+
+The test that the seam is real: **`internal/workflow` does not import
+`internal/n8n`.**
+
+### The hard part: a retry is not free
+
+Triggering a workflow is not a read. Retry a POST that opens a pull request, and you
+get **two pull requests**.
+
+> **A timeout tells you that no answer arrived. It tells you nothing about whether
+> the request did.**
+
+So every request carries an idempotency key derived from the GitHub delivery ID —
+**stable by construction**, so the same delivery always produces the same key:
+
+```
+X-Idempotency-Key: blog-generator:delivery-abc-123
+```
+
+That makes the *transport* at-least-once and lets n8n make the *execution*
+effectively-once — **but only if the workflow on the other side checks the key.**
+This repository cannot enforce that, which is why it is in bold in
+[WORKFLOWS.md](WORKFLOWS.md#the-one-hard-problem-a-retry-is-not-free) and is the
+first thing to check when something has happened twice.
+
+### What is retried, and what never is
+
+| Failure | Retry? | Why |
+| --- | --- | --- |
+| Connection refused, DNS, TLS | ✅ | The work almost certainly did not start |
+| Timeout | ✅ | It may have. Retry, and let the key sort it out |
+| `429`, `5xx` | ✅ | n8n restarting is the textbook transient failure |
+| `401` / `403` / `404` / `400` | ❌ | Asking again will not make the token valid |
+| **Workflow failed** | ❌ | **It ran.** Retrying runs it again |
+
+Backoff is exponential with **full jitter** (a fleet retrying in lockstep after an
+n8n restart knocks it straight back over) and honours `Retry-After`.
+
+**And a `200` is not a success**: n8n answers `200` and puts the error *in the body*
+when a workflow throws. Trusting the status code is how a platform cheerfully
+reports that it triggered workflows into a void.
+
+### Security
+
+The GitHub payload is the one thing here the platform did not author, and
+"we're only passing it on" is exactly how secrets travel — straight into n8n's
+execution history, which is a database, which gets backed up. Credential-shaped keys
+are redacted at any depth before the payload leaves:
+
+```
+what n8n actually received:
+  installation.access_token: [REDACTED BY PLATFORM]
+  installation.id: 42                       ← useful data survives
+  repository.full_name: teddynted/platform
+```
+
+Our own token goes in a header and **never** into a log or an error — including when
+n8n rejects it and echoes it back in the response body, which a real gateway has
+done.
+
+### Configuration
+
+Everything is an environment variable; nothing is compiled in. Adding a workflow is
+**one entry**, not a code change:
+
+```bash
+export N8N_BASE_URL=https://n8n.internal.example.com
+export N8N_TOKEN=…                       # never logged
+export N8N_WORKFLOWS='blog-generator=/webhook/blog,social-publisher=/webhook/social'
+
+go run ./cmd/workflow list                # what is wired up (token shown as "(set, 15 chars)")
+go run ./cmd/workflow trigger blog-generator --id delivery-123 --repo owner/name --sha abc
+```
+
+### Future workflows
+
+Each is a drawing in n8n plus one line of `N8N_WORKFLOWS` — **none is a change to
+this repository**: release notes · social publishing · repository indexing and
+embeddings · video storyboards · a weekly digest on a cron.
+
+### Future improvements
+
+- **The webhook handler** that receives the GitHub event and calls the Service —
+  Milestone 12. `cmd/workflow` is the reference caller it will copy.
+- **A response path.** Workflows are fire-and-forget today. When one needs to report
+  back ("the post is drafted, here is the PR"), it should publish to the platform's
+  **own event bus** — which has been sitting there since Milestone 2.
+- **A dead-letter path** for triggers that exhaust their retries.
+- **Per-workflow timeouts**, since a 10-second default suits a fire-and-forget
+  trigger and not a synchronous one.
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -757,13 +897,26 @@ flowchart TB
 
 #### Milestone 5 — Self-hosted n8n Integration
 
+✅ **Shipped.**
+[Blog post](docs/blog/using-n8n-as-the-workflow-engine-for-ai-automation.md) ·
+[WORKFLOWS.md](WORKFLOWS.md) ·
+[Diagrams](docs/architecture/n8n-diagrams.md) ·
+[Overview](#workflow-orchestration-with-n8n)
+
 - **Objective** — Introduce a durable orchestrator between events, agents, and
   the outside world.
-- **Primary focus** — Queue-mode topology, workflow state durability, and the
-  boundary with `self-hosted-n8n-on-aws`.
-- **Related technologies** — n8n, shared storage, message queues.
-- **Expected outcome** — Events reliably drive workflows, and workflows survive
-  the loss of a node.
+- **Primary focus** — The **integration**, not the deployment: the boundary with
+  `self-hosted-n8n-on-aws`, an `Engine` interface so the orchestrator stays
+  replaceable, and **idempotency** — because triggering a workflow is not a read,
+  and a retried trigger opens a second pull request.
+- **Related technologies** — Go, n8n webhooks, header auth, exponential backoff
+  with full jitter, structured logging.
+- **Outcome** — The platform can trigger a workflow, authenticate to it, survive it
+  being down, refuse to leak a token into it, and prove from a GitHub delivery ID
+  alone exactly what it asked for and what came back. Adding a workflow is one line
+  of configuration, not a code change. *Queue-mode topology and workflow-state
+  durability are n8n's own concerns and live in its repository — drawing that
+  boundary is this milestone's main design decision.*
 
 #### Milestone 6 — OpenClaw Integration
 
@@ -947,7 +1100,8 @@ built, or out of order, as a set of independent AWS design studies.
 | 2 | [Provisioning an AI Agent Platform with CloudFormation](docs/blog/provisioning-an-ai-agent-platform-with-cloudformation.md) | M2 | ✅ Published |
 | 3 | [Reducing AI Infrastructure Costs with EC2 Spot Instances](docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md) | M3 | ✅ Published |
 | 4 | [Optimizing EC2 Spot Instance Startup with Custom AMIs](docs/blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md) | M4 | ✅ Published |
-| 5+ | One per milestone, as each is built | M5+ | 📋 Planned |
+| 5 | [Using n8n as the Workflow Engine for AI Automation](docs/blog/using-n8n-as-the-workflow-engine-for-ai-automation.md) | M5 | ✅ Published |
+| 6+ | One per milestone, as each is built | M6+ | 📋 Planned |
 
 ## Future Enhancements
 
