@@ -2,6 +2,12 @@
 /dist/
 /bin/
 
+# `go build ./cmd/<name>` drops the binary in the working directory, so a plain
+# build at the repository root leaves one here, untracked and easy to commit by
+# accident.
+/release
+/workflow
+
 # Test and coverage artifacts
 *.out
 *.test
