@@ -1,0 +1,99 @@
+name: AMI
+
+# Build a versioned custom AMI for the platform (Milestone 4).
+#
+# Manually dispatched, deliberately. An image build is a versioned event with a
+# cost and a blast radius — it is not something that should happen because a
+# README changed. It is also slow (~10 minutes) and it launches a real instance.
+#
+# Rolling the new image out is a SEPARATE, explicit act: this workflow builds and
+# tags the AMI and prints its ID. Deploying it is `make deploy-ami`, or setting the
+# AWS_AMI_ID repository variable and running the Infrastructure workflow. Building
+# and deploying in one step would mean a click that silently replaces a running
+# instance.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment whose network and IAM the builder runs in
+        type: choice
+        options: [dev, staging, prod]
+        default: dev
+      version:
+        description: 'AMI version, e.g. 1.1.0 (blank = next patch version)'
+        type: string
+        default: ""
+      install_ollama:
+        description: Include Ollama in the image (~1.5 GB larger)
+        type: boolean
+        default: false
+      prune:
+        description: 'Deregister old AMIs and delete their snapshots, keeping the newest 3'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two builds racing would try to claim the same next version, and the second
+  # would fail on the name collision. Serialise them.
+  group: ami-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build custom AMI
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    permissions:
+      id-token: write   # OIDC; no long-lived credentials
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # The image pipeline is shell that runs unattended, as root, on a machine
+      # nobody is watching. Parse it before it gets that chance.
+      - name: Check the scripts parse
+        run: |
+          for script in infra/scripts/*.sh infra/scripts/ami/*.sh; do
+            bash -n "$script" || exit 1
+          done
+          python3 infra/scripts/drain-sync.py --check
+
+      - name: Build the AMI
+        run: >-
+          make -C infra ami
+          ENV="${{ github.event.inputs.environment }}"
+          REGION="${{ vars.AWS_REGION }}"
+          AMI_VERSION="${{ github.event.inputs.version }}"
+          INSTALL_OLLAMA="${{ github.event.inputs.install_ollama }}"
+
+      - name: List the images
+        run: make -C infra ami-list REGION="${{ vars.AWS_REGION }}"
+
+      # Off by default. Pruning deletes snapshots, and the previous AMI is the
+      # rollback — deleting it is not a housekeeping detail.
+      - name: Prune old images (keeping the newest 3)
+        if: github.event.inputs.prune == 'true'
+        run: make -C infra ami-prune KEEP=3 REGION="${{ vars.AWS_REGION }}"
+
+      - name: How to roll it out
+        run: |
+          {
+            echo "### AMI built"
+            echo ""
+            echo "Deploy it — this **replaces the running instance**:"
+            echo ""
+            echo '```bash'
+            echo "make -C infra deploy-ami            # newest image"
+            echo '```'
+            echo ""
+            echo "Or pin it for CI by setting the \`AWS_AMI_ID\` repository variable."
+          } >> "$GITHUB_STEP_SUMMARY"

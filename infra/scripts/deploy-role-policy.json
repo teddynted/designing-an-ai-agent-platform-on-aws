@@ -166,6 +166,36 @@
       "Effect": "Allow",
       "Action": ["ssm:GetParameter", "ssm:GetParameters"],
       "Resource": "arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/*"
+    },
+    {
+      "Sid": "AmiBuildRunCommandDocument",
+      "Comment": "SendCommand authorizes the DOCUMENT and the INSTANCE as separate resources, so they need separate statements. Putting the instance tag condition on this one would deny it: an AWS-managed document carries no Project tag, the condition would never match, and SendCommand would fail entirely. Scoped to the single shell document the build uses.",
+      "Effect": "Allow",
+      "Action": ["ssm:SendCommand"],
+      "Resource": "arn:aws:ssm:*::document/AWS-RunShellScript"
+    },
+    {
+      "Sid": "AmiBuildRunCommandInstances",
+      "Comment": "The other half: which instances the build may run that document on. build-ami.sh (Milestone 4) drives the throwaway builder over SSM — polling for the build marker, reading the manifest, triggering cleanup. The tag condition means this role cannot run shell commands on anything in the account that is not this project's.",
+      "Effect": "Allow",
+      "Action": ["ssm:SendCommand"],
+      "Resource": "arn:aws:ec2:*:__ACCOUNT_ID__:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/Project": "__PROJECT__"
+        }
+      }
+    },
+    {
+      "Sid": "AmiBuildRunCommandResults",
+      "Comment": "Reading a command's own result takes no resource ARN. It is read-only, and useless without the SendCommand above.",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations",
+        "ssm:DescribeInstanceInformation"
+      ],
+      "Resource": "*"
     }
   ]
 }
