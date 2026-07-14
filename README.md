@@ -6,7 +6,8 @@
 [![Milestone 3](https://img.shields.io/badge/M3%20EC2%20Spot-shipped-brightgreen)](docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md)
 [![Milestone 4](https://img.shields.io/badge/M4%20Custom%20AMIs-shipped-brightgreen)](docs/blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md)
 [![Milestone 5](https://img.shields.io/badge/M5%20n8n%20Integration-shipped-brightgreen)](docs/blog/using-n8n-as-the-workflow-engine-for-ai-automation.md)
-[![Next milestone](https://img.shields.io/badge/next-M6%20OpenClaw-lightgrey)](#milestone-6--openclaw-integration)
+[![Milestone 6](https://img.shields.io/badge/M6%20OpenClaw-shipped-brightgreen)](docs/blog/integrating-openclaw-into-an-ai-agent-platform.md)
+[![Next milestone](https://img.shields.io/badge/next-M7%20Ollama-lightgrey)](#milestone-7--ollama-integration)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -14,10 +15,11 @@
 > The foundation is real: the AWS infrastructure is
 > [CloudFormation you can deploy](infra/), it runs its compute on
 > [EC2 Spot with interruption handling](infra/SPOT.md), and that compute boots from
-> a [custom AMI in 2.5 seconds](infra/AMI.md) instead of 76, and the platform can now
-> [orchestrate work through self-hosted n8n](WORKFLOWS.md). Everything from
-> [Milestone 6](#milestone-6--openclaw-integration) on is still a statement of intent
-> — no agent runs and no model is called yet. See
+> a [custom AMI in 2.5 seconds](infra/AMI.md) instead of 76, the platform can
+> [orchestrate work through self-hosted n8n](WORKFLOWS.md), and it can
+> [hand a task to an autonomous agent](AGENTS.md) with a budget it cannot exceed.
+> Everything from [Milestone 7](#milestone-7--ollama-integration) on is still a
+> statement of intent — **no model is called by this platform yet**. See
 > [What exists today](#what-exists-today), which is kept honest.
 
 An open design study and reference implementation for running **autonomous AI
@@ -37,6 +39,7 @@ on a repository, and how to keep the bill and the blast radius small.
 - [Cost optimization with EC2 Spot](#cost-optimization-with-ec2-spot)
 - [Startup optimization with custom AMIs](#startup-optimization-with-custom-amis)
 - [Workflow orchestration with n8n](#workflow-orchestration-with-n8n)
+- [Agent execution with OpenClaw](#agent-execution-with-openclaw)
 - [Technology Stack](#technology-stack)
 - [Repository Scope](#repository-scope)
 - [Related Repositories](#related-repositories)
@@ -106,7 +109,8 @@ Being explicit, because everything else on this page is aspirational:
 | EC2 Spot + interruption handling | ✅ **Implemented** | [Milestone 3](#milestone-3--ec2-spot-instances): a drain agent on the instance, EventBridge rules and Go Lambdas in the account. See [infra/SPOT.md](infra/SPOT.md) |
 | Custom AMIs + fast startup | ✅ **Implemented** | [Milestone 4](#milestone-4--custom-amis): a versioned image pipeline. Boot measured at **2.5s**, down from **76s**. See [infra/AMI.md](infra/AMI.md) |
 | Workflow orchestration (n8n) | ✅ **Implemented** | [Milestone 5](#milestone-5--self-hosted-n8n-integration): the **integration** — trigger, authenticate, retry, correlate. n8n itself is deployed by [`self-hosted-n8n-on-aws`](#related-repositories). See [WORKFLOWS.md](WORKFLOWS.md) |
-| Agent runtime, inference (OpenClaw, Ollama) | 📋 Planned | Nothing runs on the instance yet — [Milestone 6](#milestone-6--openclaw-integration) onwards |
+| Agent execution (OpenClaw) | ✅ **Implemented** | [Milestone 6](#milestone-6--openclaw-integration): the **integration** — submit, track, retrieve, cancel, with mandatory budgets and untrusted-output validation. OpenClaw is deployed by [`openclaw-on-aws`](#related-repositories). See [AGENTS.md](AGENTS.md) |
+| Inference (Ollama, Bedrock, Claude) | 📋 Planned | **This platform calls no model.** The agent does — [Milestone 7](#milestone-7--ollama-integration) onwards |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -227,7 +231,7 @@ and most of it (n8n, OpenClaw, Ollama, Bedrock routing) is still unbuilt.
 The diagram above is the **target**. This is the **present** — the same AWS service
 view, drawn for what really exists in the account today:
 
-![The platform as built after Milestone 5: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sits self-hosted n8n, deployed by a separate repository, which the platform triggers over HTTPS with a token, an idempotency key and a sanitised payload; no AI workload is deployed.](docs/architecture/platform-as-built.svg)
+![The platform as built after Milestone 6: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sit two component repositories the platform integrates with but does not deploy — self-hosted n8n for orchestration and OpenClaw for agent execution, the latter enforcing a budget and rejecting any output containing a credential; the platform itself calls no AI model.](docs/architecture/platform-as-built.svg)
 
 > 🗺️ **[The Platform As Built](docs/architecture/current-architecture.md)** — the
 > living diagram set (runtime topology, stack map, the life of one instance),
@@ -683,6 +687,141 @@ embeddings · video storyboards · a weekly digest on a cron.
 - **Per-workflow timeouts**, since a 10-second default suits a fire-and-forget
   trigger and not a synchronous one.
 
+## Agent execution with OpenClaw
+
+**Milestone 6.** The platform hands open-ended work — *read this repository and draft
+a post about what changed* — to an **OpenClaw** agent, with a budget it cannot exceed
+and validation on everything it hands back.
+
+> 📄 [Integrating OpenClaw into an AI Agent Platform](docs/blog/integrating-openclaw-into-an-ai-agent-platform.md) — the blog post ·
+> 📐 [Diagrams](docs/architecture/openclaw-diagrams.md) ·
+> 🛠️ [AGENTS.md](AGENTS.md) — the integration reference
+
+> ⚠️ **This repository does not deploy OpenClaw.** Its infrastructure lives in
+> [`openclaw-on-aws`](#related-repositories). This repository owns the **contract**
+> — which, because the contract is ours to define, is written down in
+> [AGENTS.md](AGENTS.md#the-contract).
+
+### Orchestration is not execution
+
+The distinction the whole milestone rests on:
+
+| | Orchestration (n8n, M5) | Execution (OpenClaw, M6) |
+| --- | --- | --- |
+| A step is | short, deterministic | long, non-deterministic |
+| Retrying it is | safe, usually free | **expensive, possibly destructive** |
+| It knows | the shape of the pipeline | how to do one open-ended job |
+| It does not know | how to be an agent | that a pipeline exists |
+
+**Who calls the model?** *Not the platform.* The agent does. The platform says "do
+this task, within this budget"; how the agent thinks is behind the boundary — which is
+why swapping Claude for a local Ollama model is a change in `openclaw-on-aws` that
+this repository does not notice.
+
+### The shape that "slow" forces
+
+An n8n webhook returns in milliseconds. **An agent run takes minutes to hours.**
+
+```
+Submit(…)  → an execution ID, immediately     fast · retryable
+Status(id) → where it is now                  cheap · pollable
+Result(id) → what it produced, once terminal
+Cancel(id) → stop burning money
+```
+
+> **Never wait for an agent in a Lambda, an HTTP handler, or the webhook path.** You
+> would pay a process to sleep — and lose the run when that process dies, which on
+> this platform is a Spot instance with two minutes' notice.
+>
+> **Waiting is n8n's job.** It is durable and it already has wait nodes. That is a
+> large part of why the platform has an orchestrator at all.
+
+### Limits are not optional
+
+An autonomous agent in a loop is a machine for turning money into tokens, and "it kept
+trying" arrives as a bill. **There is no way to submit an execution without a budget:**
+
+```go
+if r.Task.Limits.MaxSteps <= 0 || r.Task.Limits.MaxDuration <= 0 {
+    return fmt.Errorf("%w: an execution must have limits (steps and duration)", ErrInvalidRequest)
+}
+```
+
+Not "we apply a default if you forget" — you cannot forget. Defaults: **40 steps, 20
+minutes, 1 MiB**. Steps and cost are logged even on failure, because *"it failed after
+40 steps and $1.80"* is a different problem from *"it failed immediately"*.
+
+### A retry costs money
+
+> An n8n retry wastes a webhook. **An agent retry wastes a model** — and can open a
+> second pull request.
+
+Every submit carries an idempotency key derived from the correlation ID and task type,
+**stable by construction**. Verified against a stub:
+
+```
+SUBMIT:     exec-1  agent=writer  corr=push:delivery-abc-123
+IDEMPOTENT: key blog-draft:push:delivery-abc-123 already seen -> reusing exec-1
+```
+
+### The agent is a deputy
+
+Milestone 1 wrote it down: *"OpenClaw holds a shell. Its credentials, network egress
+and filesystem are the security boundary — not the prompt."* This is where that becomes
+a function.
+
+The agent **reads a repository**, and on any public repo that content is
+**attacker-influenced** — a file can contain text shaped like an instruction. The
+platform cannot stop that from outside the agent. What it can do is refuse to carry the
+consequences onward: the agent's output is **untrusted input** to a system that is
+about to turn it into a pull request.
+
+**Rejected, not redacted** — the opposite of what the platform does to an inbound
+GitHub payload, and deliberately so:
+
+```
+agent output REJECTED — not published
+  errorKind: output_rejected
+  error: the agent's output contains what looks like a credential (aws-access-key-id).
+         Treat the secret as compromised and rotate it: the agent could read it,
+         which means it can act on it.
+```
+
+A forwarded payload with a token is *someone else's mistake in transit* — redact it and
+move on. An agent's draft with a token is **something that went wrong here**; stripping
+it and publishing the rest would *hide the incident*. The error names the **kind** of
+credential, never the value.
+
+### Try it
+
+```bash
+export OPENCLAW_BASE_URL=http://localhost:8088
+export OPENCLAW_TOKEN=…                             # never logged
+export OPENCLAW_AGENTS='blog-draft=writer,repo-analysis=analyst'
+
+go run ./cmd/agent list
+go run ./cmd/agent submit blog-draft --correlation push:delivery-123 \
+  --instructions "Draft a post about this commit." --repo owner/name --sha abc
+go run ./cmd/agent watch  exec-1                    # follow it
+go run ./cmd/agent cancel exec-1                    # stop it spending
+```
+
+### Future multi-agent architecture
+
+The registry already maps *task type → agent*, so two tasks can go to two different
+agents today. Everything below is configuration or an n8n workflow — **not a change to
+this repository**: multiple collaborating agents · human approval (a wait node) · agent
+memory, tool calling, RAG (all inside OpenClaw, behind the contract) · Bedrock and
+Ollama (the agent calls the model, not the platform).
+
+### Future improvements
+
+- **A result path.** Workflows poll today. An agent that finishes should publish to the
+  platform's **own event bus** (built in Milestone 2, still waiting for a purpose) —
+  a better shape than a callback URL.
+- **A dead-letter path** for submissions that exhaust their retries.
+- **Cost budgets per repository**, not just per execution.
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -765,12 +904,13 @@ affects exactly one, it belongs in that component's repository.
 
 The integration milestones establish the contracts. **One is now wired:** the
 platform can trigger n8n workflows ([Milestone 5](#workflow-orchestration-with-n8n))
-— though this repository still does not *deploy* n8n, and never will.
+and hand tasks to OpenClaw agents ([Milestone 6](#agent-execution-with-openclaw)) —
+though this repository *deploys* neither of them, and never will.
 
 | Repository | Purpose | Integrated at | Status |
 | --- | --- | --- | --- |
 | `self-hosted-n8n-on-aws` | Deploys the n8n workflow engine on AWS | [M5](#milestone-5--self-hosted-n8n-integration) | ✅ **Wired** — see [WORKFLOWS.md](WORKFLOWS.md) |
-| `openclaw-on-aws` | Deploys the OpenClaw agent runtime on AWS | [M6](#milestone-6--openclaw-integration) | 📋 Planned |
+| `openclaw-on-aws` | Deploys the OpenClaw agent runtime on AWS | [M6](#milestone-6--openclaw-integration) | ✅ **Wired** — see [AGENTS.md](AGENTS.md) |
 | `ollama-on-aws` | Deploys Ollama inference nodes on AWS | [M7](#milestone-7--ollama-integration) | 📋 Planned |
 | `ai-github-repository-blog-generator` | An agent that reads a repository and drafts a technical post | [M13](#milestone-13--ai-github-repository-blog-generator-integration) | 📋 Planned |
 
@@ -923,13 +1063,26 @@ flowchart TB
 
 #### Milestone 6 — OpenClaw Integration
 
+✅ **Shipped.**
+[Blog post](docs/blog/integrating-openclaw-into-an-ai-agent-platform.md) ·
+[AGENTS.md](AGENTS.md) ·
+[Diagrams](docs/architecture/openclaw-diagrams.md) ·
+[Overview](#agent-execution-with-openclaw)
+
 - **Objective** — Give the platform an agent runtime that can act, not merely
   answer.
-- **Primary focus** — Sandboxing, the credential boundary, and recovering the
-  stateful singleton after failure.
-- **Related technologies** — OpenClaw, IAM, network egress control.
-- **Expected outcome** — An agent that can run tools inside a blast radius the
-  platform defines.
+- **Primary focus** — The **integration**, not the deployment: separating
+  orchestration (n8n) from execution (OpenClaw); the asynchronous submit/track/retrieve
+  contract that a slow, expensive, non-deterministic task forces; **mandatory execution
+  budgets**; and the credential boundary — the agent's *output* is untrusted input,
+  because the repository it read is attacker-influenced.
+- **Related technologies** — Go, OpenClaw, idempotency keys, exponential backoff,
+  structured logging.
+- **Outcome** — The platform can hand an agent a task, a budget it cannot exceed, and a
+  repository — then track it, cancel it, and **refuse to publish** what comes back if it
+  contains a credential. Adding an agent is one line of configuration.
+  *Sandboxing and network egress control are OpenClaw's own concerns and live in its
+  repository; this milestone defines the contract with it.*
 
 ### Phase 3 — Inference and routing
 
@@ -1104,7 +1257,8 @@ built, or out of order, as a set of independent AWS design studies.
 | 3 | [Reducing AI Infrastructure Costs with EC2 Spot Instances](docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md) | M3 | ✅ Published |
 | 4 | [Optimizing EC2 Spot Instance Startup with Custom AMIs](docs/blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md) | M4 | ✅ Published |
 | 5 | [Using n8n as the Workflow Engine for AI Automation](docs/blog/using-n8n-as-the-workflow-engine-for-ai-automation.md) | M5 | ✅ Published |
-| 6+ | One per milestone, as each is built | M6+ | 📋 Planned |
+| 6 | [Integrating OpenClaw into an AI Agent Platform](docs/blog/integrating-openclaw-into-an-ai-agent-platform.md) | M6 | ✅ Published |
+| 7+ | One per milestone, as each is built | M7+ | 📋 Planned |
 
 ## Future Enhancements
 

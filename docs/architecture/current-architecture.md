@@ -4,12 +4,12 @@
 > is planned. Every milestone updates this file; if it disagrees with the code, the
 > file is wrong.
 >
-> **Last updated:** Milestone 5 — Self-hosted n8n Integration.
-> **Deployed:** eight CloudFormation stacks + an image pipeline, in `dev`, plus the
-> workflow-orchestration integration layer.
-> **Not deployed by this repository:** n8n itself (it lives in
-> [`self-hosted-n8n-on-aws`](../../README.md#related-repositories)), and any AI
-> workload. See [What is not built](#what-is-not-built).
+> **Last updated:** Milestone 6 — OpenClaw Integration.
+> **Deployed:** eight CloudFormation stacks + an image pipeline, in `dev`, plus two
+> integration layers — workflow orchestration (n8n) and agent execution (OpenClaw).
+> **Not deployed by this repository:** n8n and OpenClaw themselves (they live in
+> [their own repositories](../../README.md#related-repositories)), and any model. See
+> [What is not built](#what-is-not-built).
 
 The other diagram sets are *snapshots* — each one froze at the milestone that wrote
 it, and they are kept that way on purpose, as the record of a decision:
@@ -21,6 +21,7 @@ it, and they are kept that way on purpose, as the record of a decision:
 | [spot-diagrams.md](spot-diagrams.md) | **M3** — Spot interruption handling. |
 | [ami-diagrams.md](ami-diagrams.md) | **M4** — the custom AMI pipeline. |
 | [n8n-diagrams.md](n8n-diagrams.md) | **M5** — the workflow-orchestration integration. |
+| [openclaw-diagrams.md](openclaw-diagrams.md) | **M6** — the agent-execution integration. |
 | **this file** | **Everything, as it exists today.** |
 
 ## 1. Runtime architecture
@@ -33,7 +34,7 @@ the same colour key.
 Note how little of it is an "AI platform" yet. This is a foundation with no workload
 on it, and the legend says so out loud rather than leaving you to infer it.
 
-![The platform as built after Milestone 5: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sits self-hosted n8n, deployed by a separate repository, which the platform triggers over HTTPS with a token, an idempotency key and a sanitised payload; no AI workload is deployed.](platform-as-built.svg)
+![The platform as built after Milestone 6: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sit two component repositories the platform integrates with but does not deploy — self-hosted n8n for orchestration and OpenClaw for agent execution, the latter enforcing a budget and rejecting any output containing a credential; the platform itself calls no AI model.](platform-as-built.svg)
 
 The same thing as a flow view — useful for seeing the two independent paths out of
 an interruption (the instance saves its own work; the account merely watches):
@@ -67,7 +68,10 @@ flowchart TB
     ssm(["Operator → SSM Session Manager<br/>(no SSH, no key pair)"])
 
     wf["workflow.Service → Engine (M5)<br/>Go, in THIS repository.<br/>Not an AWS resource — a library,<br/>with no caller deployed yet (M12)"]
-    n8n["self-hosted n8n<br/>ANOTHER REPOSITORY<br/>self-hosted-n8n-on-aws"]
+    ag["agent.Service → Runtime (M6)<br/>submit · track · retrieve · cancel<br/>budgets enforced · output validated"]
+    n8n["self-hosted n8n<br/>ANOTHER REPOSITORY"]
+    oc["OpenClaw<br/>ANOTHER REPOSITORY"]
+    model["AI model<br/>called by the AGENT,<br/>never by this platform"]
 
     ec2 --- ebs
     subnet --> igw
@@ -79,30 +83,38 @@ flowchart TB
     l1 & l2 -->|"re-publish"| platbus --> dispatch
     l1 & l2 --> cw
     wf -->|"HTTPS + token · idempotency key<br/>· sanitised payload"| n8n
+    n8n -->|"orchestrates"| ag
+    ag -->|"HTTPS + token · idempotency key<br/>· mandatory budget"| oc
+    oc --> model
+    oc -.->|"output — UNTRUSTED,<br/>validated before use"| ag
     wf -.->|"structured logs"| cw
+    ag -.->|"structured logs"| cw
 
     classDef aws fill:#FF9900,stroke:#232F3E,color:#232F3E
     classDef store fill:#3F8624,stroke:#243B0B,color:#FFFFFF
     classDef ext fill:#E8E8E8,stroke:#666,color:#232F3E
-    class ec2,l1,l2,dispatch,rules,defbus,platbus,wf aws
+    class ec2,l1,l2,dispatch,rules,defbus,platbus,wf,ag aws
     class s3,cw,ami,ebs store
-    class ssm,n8n ext
+    class ssm,n8n,oc,model ext
 ```
 
-**The three facts this diagram is really carrying:**
+**The four facts this diagram is really carrying:**
 
 1. **Nothing durable lives on the instance.** The root volume is deleted on
    termination, so anything that must survive goes to S3 — which is why the drain
    agent (M3) exists at all.
 2. **The instance is reachable by nobody.** No inbound rules, no SSH key. Operators
    arrive through SSM Session Manager.
-3. **n8n is drawn outside the account on purpose.** Milestone 5 added an
-   *integration*, not infrastructure — it creates **no AWS resources**. The engine is
-   deployed, versioned and backed up by
-   [`self-hosted-n8n-on-aws`](../../README.md#related-repositories); this repository
-   owns only the contract with it. And that integration has **no caller deployed yet**:
-   the webhook handler is Milestone 12, so today it is exercised by
-   [`cmd/workflow`](../../cmd/workflow) and its tests.
+3. **n8n and OpenClaw are drawn outside the account on purpose.** Milestones 5 and 6
+   added *integrations*, not infrastructure — between them they create **no AWS
+   resources**. Both engines are deployed, versioned and backed up by
+   [their own repositories](../../README.md#related-repositories); this one owns only
+   the contracts. Neither integration has a **caller deployed yet**: the webhook handler
+   is Milestone 12, so today they are exercised by
+   [`cmd/workflow`](../../cmd/workflow), [`cmd/agent`](../../cmd/agent), and their tests.
+4. **The model is called by the agent, never by the platform.** That is why swapping
+   Claude for a local Ollama model is a change in `openclaw-on-aws` that this repository
+   does not notice — and why "inference" is still in [what is not built](#what-is-not-built).
 
 ## 2. The stacks, and the one thing that is not a stack
 
@@ -209,13 +221,14 @@ flowchart TB
     m2["M2 · CloudFormation<br/>VPC · IAM · EC2 · S3 · EventBridge · CloudWatch<br/>the instance is disposable"] --> m3
     m3["M3 · EC2 Spot<br/>~70% off + interruption handling<br/>drain agent + 5 rules + 2 Go Lambdas<br/>disposability is now SAFE"] --> m4
     m4["M4 · Custom AMIs<br/>76s → 6.2s boot · immutable images<br/>disposability is now CHEAP"] --> m5
-    m5["M5 · n8n integration<br/>the platform can now ORCHESTRATE<br/>trigger · authenticate · retry · correlate<br/>(n8n itself lives in another repository)"] --> m6
+    m5["M5 · n8n integration<br/>the platform can now ORCHESTRATE<br/>trigger · authenticate · retry · correlate"] --> m6
+    m6["M6 · OpenClaw integration<br/>the platform can now DELEGATE WORK<br/>submit · track · cancel · budget · validate<br/>(orchestration is not execution)"] --> m7
 
-    m6["M6 · OpenClaw<br/>the agent that does the work"]:::next
+    m7["M7 · Ollama<br/>the model the agent calls"]:::next
 
     classDef done fill:#3F8624,stroke:#243B0B,color:#FFFFFF
     classDef next fill:#E8E8E8,stroke:#666,color:#232F3E,stroke-dasharray: 5 5
-    class m1,m2,m3,m4,m5 done
+    class m1,m2,m3,m4,m5,m6 done
 ```
 
 The dependency between them is not arbitrary, and it is the argument of the whole
@@ -236,9 +249,10 @@ more than this:
 
 | | Status |
 | --- | --- |
-| n8n **deployment** | ➡️ Not ours. Owned by [`self-hosted-n8n-on-aws`](../../README.md#related-repositories). This repository owns the **integration** — the contract, not the instance. |
-| The webhook handler that calls the integration | ❌ Not built (M12). `cmd/workflow` is the reference caller in the meantime. |
-| OpenClaw, Ollama | ❌ Not installed. The compute is still empty. |
+| n8n and OpenClaw **deployments** | ➡️ Not ours. Owned by [their own repositories](../../README.md#related-repositories). This one owns the **integrations** — the contracts, not the instances. |
+| The webhook handler that calls them | ❌ Not built (M12). `cmd/workflow` and `cmd/agent` are the reference callers in the meantime. |
+| **Any model inference** | ❌ **This platform calls no model.** The agent does, behind the boundary (M7+). |
+| Ollama | ❌ Not installed. The compute is still empty. |
 | Any model inference | ❌ None. No GPU instance runs (cost + quota). |
 | Bedrock / Claude routing | ❌ Not built. |
 | Auto Scaling group | ❌ Still **one** instance. The launch template is ready for it (M19). |
@@ -247,8 +261,10 @@ more than this:
 | Scheduled AMI rebuilds | ❌ Manual. A baked image gets staler every day. |
 
 The honest summary: **this is a well-built platform that can now ask for work to be
-done, but has nothing yet to do it with.** Milestone 5 gave it an orchestrator to
-delegate to; Milestone 6 gives it an agent that can actually act.
+done, and hand it to something that can do it — but the thing that does it, and the
+model behind it, both live elsewhere.** Milestone 5 gave it an orchestrator; Milestone 6
+gave it an agent to delegate to. Milestone 7 gives that agent a model this platform
+actually runs.
 
 ## Keeping this file current
 
