@@ -1,4 +1,4 @@
-# Infrastructure — Milestones 2 and 3
+# Infrastructure — Milestones 2, 3 and 4
 
 The AI Agent Platform's foundational AWS infrastructure, as CloudFormation.
 
@@ -8,9 +8,11 @@ The AI Agent Platform's foundational AWS infrastructure, as CloudFormation.
 
 The *why* behind every decision here is in the blog posts:
 [Provisioning an AI Agent Platform with CloudFormation](../docs/blog/provisioning-an-ai-agent-platform-with-cloudformation.md)
-(Milestone 2) and
+(Milestone 2),
 [Reducing AI Infrastructure Costs with EC2 Spot Instances](../docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md)
-(Milestone 3). This file is the operational reference.
+(Milestone 3), and
+[Optimizing EC2 Spot Instance Startup with Custom AMIs](../docs/blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md)
+(Milestone 4). This file is the operational reference.
 
 ## What this provisions
 
@@ -23,6 +25,11 @@ foundation later milestones build on. It installs **no** application software
 to actually use: a drain agent on the instance that saves its work when AWS
 reclaims it, and EventBridge rules and Lambdas in the account that count, log,
 and re-publish every Spot event. See **[SPOT.md](SPOT.md)**.
+
+**Milestone 4** adds a custom AMI, so the instance boots from an image where the
+software is already installed instead of installing it on every launch. That
+matters most on Spot: an instance reclaimed while it is still running `dnf update`
+did no work at all. See **[AMI.md](AMI.md)**.
 
 > **Educational scope.** This project is built to learn from. The compute
 > defaults to a `t3.xlarge` on **Spot** (~$0.05/hour, ~$36/month; ~$0.17/hour
@@ -42,10 +49,11 @@ infra/
 ├── Makefile                     convenience wrapper around the AWS CLI
 ├── SCHEDULER.md                 the instance scheduler, documented
 ├── SPOT.md                      Spot interruption handling, documented
+├── AMI.md                       custom AMIs and the image pipeline, documented
 ├── cloudformation/
 │   ├── 01-network.yaml          VPC, public subnet, IGW, route table, security group
 │   ├── 02-iam.yaml              EC2 role + instance profile, Lambda role (least privilege)
-│   ├── 03-compute.yaml          launch template + disposable EC2 Spot instance + drain agent
+│   ├── 03-compute.yaml          launch template + disposable EC2 Spot instance; AmiId picks the boot path
 │   ├── 04-storage.yaml          S3 artifact bucket (encrypted, versioned, TLS-only)
 │   ├── 05-events.yaml           EventBridge bus + rule + placeholder Lambda
 │   ├── 06-observability.yaml    CloudWatch log groups with retention
@@ -53,18 +61,34 @@ infra/
 │   ├── 08-spot.yaml             add-on: Spot interruption rules, handlers, IAM, metrics
 │   └── params/
 │       └── dev.example.json     example parameter values
-└── lambda/                      the Go Lambdas (one module)
-    ├── cmd/start · cmd/stop                 the scheduler's handlers (07)
-    ├── cmd/interruption · cmd/statechange   the Spot handlers (08)
-    └── internal/ec2sched · internal/spot    their logic, unit-tested
+├── lambda/                      the Go Lambdas (one module)
+│   ├── cmd/start · cmd/stop                 the scheduler's handlers (07)
+│   ├── cmd/interruption · cmd/statechange   the Spot handlers (08)
+│   └── internal/ec2sched · internal/spot    their logic, unit-tested
+└── scripts/                     the image pipeline (Milestone 4)
+    ├── build-ami.sh             build, version, tag, and prune custom AMIs
+    ├── startup-benchmark.sh     measure install-at-boot vs baked, on real instances
+    ├── drain-sync.py            keep the drain agent's two copies identical
+    └── ami/
+        ├── provision.sh         what gets baked into the image
+        ├── cleanup.sh           what gets stripped out before the snapshot
+        ├── spot-drain.sh        the drain agent (single source of truth)
+        └── spot-drain.service   its systemd unit
 ```
+
+There is no CloudFormation template for the AMI, and that is deliberate:
+CloudFormation has no resource type that *builds* an image. It **consumes** one —
+that is the compute stack's `AmiId` parameter. Building is a pipeline concern,
+consuming is an infrastructure concern, and the AMI ID is the interface between
+them.
 
 Each template is a standalone stack. They are linked only by CloudFormation
 exports/imports, so any one can be read, reviewed, or updated on its own.
 
 `01`–`06` are the core, deployed by `make deploy` with nothing but the AWS CLI.
 `07` and `08` are **add-ons**: they carry Go code, so they need the Go toolchain
-and the artifact bucket, and each has its own deploy target.
+and the artifact bucket, and each has its own deploy target. The image pipeline in
+`scripts/` is neither — it produces an AMI ID that the compute stack consumes.
 
 ## Deploy order
 
@@ -113,6 +137,8 @@ cd infra
 make lint                 # validate every template with cfn-lint
 make deploy               # deploy the six core stacks in order (AWS CLI only)
 make spot                 # add Spot interruption handling (needs Go) — Milestone 3
+make ami                  # build a custom AMI — Milestone 4
+make deploy-ami           # relaunch the instance from the newest AMI
 make outputs              # show every stack's outputs
 make delete               # tear down (the artifact bucket is retained)
 ```
@@ -233,7 +259,8 @@ are tuned for a low-cost development environment.
 | `DrainPollSeconds` | `5` | compute | How often the drain agent polls IMDS for an interruption notice. |
 | `LogRetentionDays` | `14` | events, observability, spot | Raise for staging/prod. |
 | `NoncurrentVersionExpirationDays` | `90` | storage | Bounds versioning cost. |
-| `LatestAmiId` | *(SSM)* | compute | Resolves the latest Amazon Linux 2023 AMI; override to pin one. |
+| `LatestAmiId` | *(SSM)* | compute | Resolves the latest Amazon Linux 2023 AMI; used only when `AmiId` is empty. |
+| `AmiId` | *(empty)* | compute | Custom AMI to boot from ([Milestone 4](AMI.md)). Empty = stock image + install at boot. `make deploy-ami` resolves the newest one from tags. |
 | `RebalanceRuleState` | `ENABLED` | spot | `DISABLED` to ignore the advisory rebalance signal. |
 
 ## Cost
@@ -327,6 +354,44 @@ aws iam simulate-principal-policy \
   --action-names s3:PutObject \
   --resource-arns arn:aws:s3:::aiap-dev-artifacts-<account>-us-east-1/spot/interruption.zip
 ```
+
+**`Max spot instance count exceeded` when *replacing* an instance that already
+exists.** The quota error, but with a twist worth understanding: **CloudFormation
+creates the replacement before it deletes the original**, so for a few minutes you
+need **twice** the vCPUs. An account sitting at 8/8 vCPUs of Spot quota cannot
+replace a 4-vCPU instance, even though the end state fits perfectly.
+
+This bites exactly when you change the launch template — a new AMI, new user data,
+a new instance type — which is to say, on most deploys.
+
+```bash
+# What the quota is, and what is using it:
+aws service-quotas get-service-quota --service-code ec2 --quota-code L-34B43A08 --region us-east-1
+aws ec2 describe-instances --region us-east-1 \
+  --filters "Name=instance-lifecycle,Values=spot" "Name=instance-state-name,Values=running" \
+  --query 'Reservations[].Instances[].[InstanceId,InstanceType]' --output text
+```
+
+Three ways out:
+
+1. **Raise the quota** so a replacement has headroom — the real fix. Ask for at
+   least **2× the vCPUs of your largest instance**, precisely because of the
+   create-then-delete overlap.
+   ```bash
+   aws service-quotas request-service-quota-increase \
+     --service-code ec2 --quota-code L-34B43A08 --desired-value 16 --region us-east-1
+   ```
+   It opens a support case, so it is not instant.
+2. **Free the vCPUs first.** Terminate the instance the stack owns, then deploy —
+   the create now has room, and CloudFormation is happy to "delete" an instance that
+   is already gone. The instance is disposable by design, so this costs nothing but
+   the boot (which, since Milestone 4, is 2.5 seconds).
+3. **`PURCHASE=on-demand`** for the deploy. On-Demand does not draw on the Spot
+   quota at all.
+
+Note that quota **utilization lags termination by a few minutes** — a terminated
+instance's vCPUs are not instantly available, so an immediate retry can fail with
+the same message. Wait, then retry.
 
 **`There is no Spot capacity available that matches your request`.** Different
 from the quota error above, and fixed differently. This is **capacity**, not
@@ -433,6 +498,35 @@ The instance must be **stoppable** — an On-Demand instance, or a Spot instance
 launched with `SpotInterruptionBehavior=stop`. Full documentation, including the
 architecture, IAM, timezone and schedule editing, cost model, and troubleshooting,
 is in **[SCHEDULER.md](SCHEDULER.md)**.
+
+## Custom AMIs (Milestone 4)
+
+The compute stack's `AmiId` parameter decides how the instance boots. Empty, it
+launches the stock Amazon Linux 2023 image and installs everything at boot. Given
+a custom AMI, it launches an image where the software is **already there**, and
+UserData collapses from ~150 lines of installing to ~30 lines of configuring:
+
+```bash
+make ami                                    # build a versioned image (~10 min)
+make ami-list                               # what exists
+make deploy-ami                             # relaunch onto the newest image
+make deploy-ami AMI_ID=ami-<previous>       # roll back
+make ami-prune KEEP=3                       # retire old versions AND their snapshots
+make startup-benchmark                      # measure it yourself, on real instances
+```
+
+Why it matters here more than elsewhere: a Spot instance can be reclaimed with two
+minutes' notice, so an instance that spends its first four minutes installing
+Docker may be taken away **having done no work at all**. Baking the image moves
+that work to a builder nobody is waiting for — and moves every download failure
+from an unattended production boot to a build that fails in front of you.
+
+Full documentation — what to bake and what never to bake, versioning, rollback,
+the security cleanup, cost, and troubleshooting — is in **[AMI.md](AMI.md)**.
+
+Images are built by the manually-dispatched
+[`AMI` workflow](../.github/workflows/ami.yml), not on every merge: a build is a
+deliberate, versioned event.
 
 ## Spot interruption handling (Milestone 3)
 
