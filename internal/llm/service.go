@@ -188,6 +188,40 @@ func (s *Service) begin(req Request) (*slog.Logger, error) {
 		return nil, err
 	}
 
+	caps := s.provider.Capabilities()
+
+	// Refuse a capability the provider does not have, rather than sending the request and
+	// hoping. This is the same argument as ErrContextExceeded: the failure mode of asking
+	// a model for something it cannot do is not an error, it is a confident wrong answer.
+	if len(req.Tools) > 0 && !caps.Tools {
+		err := fmt.Errorf("%w: %s cannot use tools", ErrUnsupported, s.provider.Name())
+		log.Error("tools requested from a provider that has none", "error", err, "errorKind", Kind(err))
+		return nil, err
+	}
+	if req.Reasoning != nil && !caps.Reasoning {
+		err := fmt.Errorf("%w: %s does not support extended reasoning", ErrUnsupported, s.provider.Name())
+		log.Error("reasoning requested from a provider that cannot", "error", err, "errorKind", Kind(err))
+		return nil, err
+	}
+	if req.Reasoning != nil && req.Options.MaxTokens > 0 &&
+		req.Reasoning.BudgetTokens >= req.Options.MaxTokens {
+		// Thinking is billed as output and drawn from the SAME budget as the answer. Set
+		// the two the wrong way round and the model reasons beautifully, exhausts the
+		// budget, and is cut off before it writes a single word of the reply.
+		err := fmt.Errorf("%w: the reasoning budget (%d) must be smaller than maxTokens (%d) — "+
+			"thinking is drawn from the same budget as the answer, so a model configured this "+
+			"way would think until it ran out and never reply",
+			ErrInvalidRequest, req.Reasoning.BudgetTokens, req.Options.MaxTokens)
+		log.Error("the reasoning budget leaves no room for an answer", "error", err, "errorKind", Kind(err))
+		return nil, err
+	}
+
+	if req.PromptVersion != "" {
+		// Which version of the prompt produced this? The first question anyone asks when
+		// the output changes and nobody touched the model.
+		log = log.With("promptVersion", req.PromptVersion)
+	}
+
 	// The prompt is NOT logged. It contains repository content: source code, commit
 	// messages, and — on a bad day — something nobody meant to commit. A hash lets two
 	// log lines be recognised as the same prompt without the prompt being in either.
@@ -197,6 +231,8 @@ func (s *Service) begin(req Request) (*slog.Logger, error) {
 		"promptHash", hash(input),
 		"maxTokens", req.Options.MaxTokens,
 		"temperature", req.Options.Temperature,
+		"tools", len(req.Tools),
+		"reasoning", req.Reasoning != nil,
 	)
 	return log, nil
 }
@@ -215,7 +251,17 @@ func (s *Service) finish(log *slog.Logger, req Request, res Response, err error,
 		return res, err
 	}
 
-	if strings.TrimSpace(res.Content) == "" {
+	// An empty completion is a failure — UNLESS the model stopped to ask for a tool, in
+	// which case having no text is entirely correct and expected.
+	//
+	// Milestone 9 found this the hard way. A tool-use turn legitimately produces zero
+	// characters of prose: the model's whole output is "call run_workflow with these
+	// arguments". The check written in Milestone 7 knew nothing about that and rejected
+	// the first tool call the platform ever made, as an empty completion.
+	//
+	// It is a small bug with a large moral: a guard written against one behaviour will
+	// happily reject a new one, and it will do so in the vocabulary of the old.
+	if strings.TrimSpace(res.Content) == "" && !res.WantsTools() {
 		// A 200 with no tokens is not a success. It is a model that is loaded wrong, or
 		// a prompt that was truncated to nothing — and passing an empty string back as
 		// if it were an answer is how a platform publishes an empty blog post.
@@ -236,6 +282,18 @@ func (s *Service) finish(log *slog.Logger, req Request, res Response, err error,
 		"outputChars", len(res.Content),
 		"streamed", streamed,
 	)
+
+	// The model stopped to ask for something rather than answering. Log the names — not
+	// the arguments, which are derived from the prompt and are therefore repository
+	// content, exactly like the prompt itself.
+	if res.WantsTools() {
+		names := make([]string, 0, len(res.ToolCalls))
+		for _, c := range res.ToolCalls {
+			names = append(names, c.Name)
+		}
+		log.Info("the model asked for tools", "toolCalls", names)
+		return res, nil
+	}
 
 	// "length" means the model was CUT OFF by the token budget. A truncated blog post
 	// looks a great deal like a finished one until somebody reads the end of it, so
@@ -276,6 +334,21 @@ func Kind(err error) string {
 	switch {
 	case err == nil:
 		return ""
+
+	// Before everything else: it is the fact that decides whether a retry is even on the
+	// table, and an alert that missed it would be advising someone to run a workflow twice.
+	case errors.Is(err, ErrEffectsCommitted):
+		return "effects_committed"
+
+	case errors.Is(err, ErrUnsupported):
+		return "unsupported"
+	case errors.Is(err, ErrSchemaViolation):
+		return "schema_violation"
+	case errors.Is(err, ErrToolLoop):
+		return "tool_loop"
+	case errors.Is(err, ErrToolFailed):
+		return "tool_failed"
+
 	case errors.Is(err, ErrModelNotFound):
 		return "model_not_found"
 	case errors.Is(err, ErrContextExceeded):

@@ -68,6 +68,22 @@ const (
 	// EnvStream selects streaming by default.
 	EnvStream = "BEDROCK_STREAM"
 
+	// EnvPromptCache turns on Bedrock prompt caching (Milestone 9).
+	//
+	// It matters most in a tool loop, where the system prompt and every tool schema are
+	// re-sent on every turn. Caching that stable prefix bills it at a fraction after the
+	// first read — and on a six-turn conversation that is most of the invoice.
+	EnvPromptCache = "BEDROCK_PROMPT_CACHE"
+
+	// EnvTools and EnvReasoning override the capabilities inferred from the model ID.
+	//
+	// They exist because Bedrock will not tell us. ListFoundationModels does not report
+	// whether a model supports tool use, so the platform infers it from the model name
+	// and lets an operator correct it — which is unsatisfying, and better than finding
+	// out through a ValidationException in production.
+	EnvTools     = "BEDROCK_TOOLS"
+	EnvReasoning = "BEDROCK_REASONING"
+
 	// EnvEndpoint overrides the Bedrock endpoint. Its real purpose is a **VPC endpoint**
 	// (AWS PrivateLink) for bedrock-runtime, which keeps the prompt off the public
 	// internet — see the note on Local in Capabilities. It is also what a test or a local
@@ -129,6 +145,12 @@ type Config struct {
 	MaxTokens     int
 	Temperature   float64
 	Stream        bool
+	PromptCache   bool
+
+	// Tools and Reasoning are what this model can DO. Inferred from the model ID
+	// (Claude can; most others cannot do all of it) and overridable.
+	Tools     bool
+	Reasoning bool
 
 	Timeout       time.Duration
 	IdleTimeout   time.Duration
@@ -200,6 +222,19 @@ func ConfigFromEnv() (Config, error) {
 		return Config{}, fmt.Errorf("%w: %s must be at least 1 (it counts total attempts, not retries)",
 			ErrConfig, EnvRetryAttempts)
 	}
+	// Claude is the reason this milestone exists: it reasons, it returns schemas, and it
+	// calls tools. Other Bedrock models do some of that and not the rest, so the default
+	// is inferred from the model ID and an operator can override it.
+	claude := isClaude(cfg.ModelID)
+	if cfg.Tools, err = envBool(EnvTools, claude); err != nil {
+		return Config{}, err
+	}
+	if cfg.Reasoning, err = envBool(EnvReasoning, claude); err != nil {
+		return Config{}, err
+	}
+	if cfg.PromptCache, err = envBool(EnvPromptCache, false); err != nil {
+		return Config{}, err
+	}
 	if cfg.Stream, err = envBool(EnvStream, true); err != nil {
 		return Config{}, err
 	}
@@ -243,6 +278,22 @@ func (c Config) Capabilities() llm.Capabilities {
 		// table that is quietly wrong.
 		CostPer1MInputTokensUSD:  c.InputCostPer1M,
 		CostPer1MOutputTokensUSD: c.OutputCostPer1M,
+
+		// --- Milestone 9 -----------------------------------------------------
+		//
+		// The first time a Capabilities field says what a model can *do* rather than
+		// where it runs or what it costs — and the first time Milestone 10's router has
+		// a reason to refuse a route rather than merely prefer another one. "Send it to
+		// whichever is cheaper" is a safe thing to say right up until one of them cannot
+		// do the job, at which point cheaper means confidently wrong.
+		Tools: c.Tools,
+
+		// On Bedrock, structured output IS tool use: one tool, forced, whose schema is
+		// the object you want back. So it tracks Tools — but it is a separate field,
+		// because that is a fact about this provider and not about the world.
+		StructuredOutput: c.Tools,
+
+		Reasoning: c.Reasoning,
 	}
 }
 
@@ -275,6 +326,9 @@ func (c Config) Redacted() map[string]any {
 		"awsSdkRetries":   "(disabled — this integration owns the retry policy)",
 		"inputCostPer1M":  c.InputCostPer1M,
 		"outputCostPer1M": c.OutputCostPer1M,
+		"tools":           c.Tools,
+		"reasoning":       c.Reasoning,
+		"promptCache":     c.PromptCache,
 	}
 }
 

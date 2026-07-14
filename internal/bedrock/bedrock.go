@@ -219,10 +219,12 @@ func (c *Client) Generate(ctx context.Context, req llm.Request) (llm.Response, e
 		defer cancel()
 
 		res, err := c.runtime.Converse(ctx, &bedrockruntime.ConverseInput{
-			ModelId:         aws.String(c.model(req)),
-			Messages:        c.messages(req),
-			System:          c.system(req),
-			InferenceConfig: c.inference(req),
+			ModelId:                      aws.String(c.model(req)),
+			Messages:                     c.messagesWithTools(req),
+			System:                       c.systemBlocks(req),
+			InferenceConfig:              c.inference(req),
+			ToolConfig:                   toolConfig(req),
+			AdditionalModelRequestFields: reasoningFields(req),
 		})
 		if err != nil {
 			return c.classify(err)
@@ -233,9 +235,12 @@ func (c *Client) Generate(ctx context.Context, req llm.Request) (llm.Response, e
 			return fmt.Errorf("%w: Bedrock returned no message", llm.ErrInvalidResponse)
 		}
 
+		text, calls, reasoning := contentOf(message.Value.Content)
 		out = llm.Response{
 			Model:        c.model(req),
-			Content:      textOf(message.Value.Content),
+			Content:      text,
+			ToolCalls:    calls,
+			Reasoning:    reasoning,
 			Usage:        usageOf(res.Usage, res.Metrics),
 			FinishReason: finishReason(res.StopReason),
 		}
@@ -466,6 +471,10 @@ func usageOf(u *types.TokenUsage, metrics *types.ConverseMetrics) llm.Usage {
 // off, and a truncated blog post looks a great deal like a finished one.
 func finishReason(reason types.StopReason) string {
 	switch reason {
+	case types.StopReasonToolUse:
+		// Not an ending at all: the model stopped to ASK for something. A caller that
+		// treats this as an answer gets an empty string and no explanation of why.
+		return "tool_use"
 	case types.StopReasonMaxTokens:
 		return "length"
 	case types.StopReasonStopSequence:

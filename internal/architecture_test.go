@@ -213,3 +213,59 @@ func TestOnlyTheFactoryKnowsAboutMoreThanOneVendor(t *testing.T) {
 		}
 	}
 }
+
+// TestTheInferencePlaneDoesNotKnowWhatAToolDoes is Milestone 9's seam, and it is the one
+// most likely to be broken by a change that looks entirely reasonable.
+//
+// Milestone 9 gave the model tools, and the platform's tools are its OWN integrations: the
+// model can trigger an n8n workflow and submit an OpenClaw task. So there is now a real
+// temptation for internal/llm — which runs the tool loop — to import internal/tools, or
+// internal/workflow, "just to know what it is calling".
+//
+// It must not. internal/llm knows exactly two things about a tool: its schema, and whether
+// it is a [llm.Write] tool. That second fact is all the loop needs to decide the only
+// question it has any business deciding — may this be retried? — and knowing any more would
+// weld the inference plane to the orchestration plane, so that the M10 router could not be
+// built without dragging n8n's HTTP client behind it.
+//
+// The dependency points the correct way, and only that way:
+//
+//	internal/tools  →  internal/llm      (it implements llm.ToolRunner)
+//	internal/tools  →  internal/workflow, internal/agent   (it calls the platform's cores)
+//	internal/llm    →  nothing of the sort
+func TestTheInferencePlaneDoesNotKnowWhatAToolDoes(t *testing.T) {
+	deps := transitiveImports(t, module+"llm")
+
+	for _, forbidden := range []string{"tools", "workflow", "agent", "prompt"} {
+		if deps[module+forbidden] {
+			t.Errorf("internal/llm imports internal/%s.\n\n"+
+				"The inference plane must not know what a tool DOES. It knows a tool's schema and\n"+
+				"whether it is a Write tool — which is everything the loop needs in order to decide\n"+
+				"the only question it owns: may this be retried? Knowing more welds inference to\n"+
+				"orchestration, and the Milestone 10 router could not then be built without\n"+
+				"dragging the workflow engine along behind it.\n\n"+
+				"internal/tools implements llm.ToolRunner. The arrow points that way, and only that way.",
+				forbidden)
+		}
+	}
+
+	// The other half: the tool registry really does implement the platform's interface,
+	// rather than having grown a private vocabulary of its own.
+	toolDeps := transitiveImports(t, module+"tools")
+	for _, required := range []string{"llm", "workflow", "agent"} {
+		if !toolDeps[module+required] {
+			t.Errorf("internal/tools does not import internal/%s — it is supposed to expose the "+
+				"platform's own capabilities to the model, through the platform's own cores", required)
+		}
+	}
+
+	// And the tool registry must never reach a vendor directly. The model's tools are the
+	// platform's CORES (workflow, agent); which engine actually runs them is a decision that
+	// stays exactly where Milestones 5 and 6 put it.
+	for _, vendor := range []string{"n8n", "openclaw", "ollama", "bedrock"} {
+		if toolDeps[module+vendor] {
+			t.Errorf("internal/tools imports internal/%s — a tool must go through the platform's "+
+				"core (workflow.Service, agent.Service), not reach past it to a vendor", vendor)
+		}
+	}
+}

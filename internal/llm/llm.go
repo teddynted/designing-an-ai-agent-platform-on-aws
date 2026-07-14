@@ -1,6 +1,24 @@
-// Package llm is the platform's boundary with whatever produces tokens. Today
-// that is a self-hosted Ollama; tomorrow it is Bedrock, or Claude, or all three at
-// once with something choosing between them.
+// Package llm is the platform's boundary with whatever produces tokens: a self-hosted
+// Ollama (M7), Amazon Bedrock (M8), and — through Bedrock — Claude, which can reason,
+// return a schema, and call the platform's own tools (M9). Milestone 10 chooses between
+// them per request.
+//
+// # Milestone 9 changed this package, and the previous two did not
+//
+// Milestone 8 was the good outcome: a second provider arrived, the interface did not
+// change, and only the error vocabulary grew. Claude is not that. Claude is not really a
+// new *provider* at all — it is reachable the moment BEDROCK_MODEL_ID names it — it is a
+// new set of *demands*, and they land on the interface itself:
+//
+//   - Generate(prompt) → text cannot express "return exactly this schema".
+//   - It cannot express "here are four tools; call them until you are done".
+//   - It cannot express "think first, and let me pay for the thinking".
+//
+// So [Request], [Response], [Message] and [Capabilities] all grew. That is a more
+// invasive change than Milestone 8's and it is the honest cost of the capability — but
+// note what did NOT change: [Provider] still has the same five methods, and the Ollama
+// implementation compiles untouched, because a provider that cannot do these things
+// simply says so in [Capabilities] and the platform refuses on its behalf.
 //
 // # A claim from Milestone 6, corrected
 //
@@ -42,27 +60,49 @@
 // facts a router will need (is it local, what does it cost, how much context does
 // it have) and nothing else. It is not a plugin system.
 //
-// # The one that will bite you
+// # "A retry is safe here" — withdrawn in Milestone 9
 //
-// Inference is the first integration in this platform where **a retry is safe**.
+// Milestones 7 and 8 both said this, in bold, and I believed it:
 //
-// Milestone 5: retrying an n8n trigger can run a workflow twice. Milestone 6:
-// retrying an agent submission can open a second pull request and spend real money.
-// Both needed idempotency keys and careful, narrow retry policies.
+//	Inference is the first integration in this platform where a retry is safe.
+//	Milestone 5: retrying an n8n trigger can run a workflow twice. Milestone 6:
+//	retrying an agent submission can open a second pull request. Generation has no
+//	side effects — it reads a prompt and produces tokens — so the worst case of a
+//	retry is paying for the compute twice.
 //
-// Generation has no side effects. It reads a prompt and produces tokens. Retrying
-// it costs compute and nothing else — no duplicate pull request, no second
-// invoice, nothing to deduplicate. That is a genuinely easier world, and it is
-// worth saying out loud, because the reflex built over the last two milestones was
-// "be terrified of retrying".
+// Every sentence of that is true of a model that can only produce tokens. Milestone 9
+// gave the model **tools**, and the claim did not survive contact with them.
 //
-// With one exception, and it is the sharp edge of this milestone: **once a stream
-// has emitted a token, it can no longer be retried.** The caller has already seen
-// half an answer. Retrying would send them a second beginning. See [Provider.Stream].
+// A model with a `run_workflow` tool can trigger an n8n run. A model with
+// `submit_agent_task` can open a pull request and spend money. The inference now has
+// side effects — the model chooses them — and "just retry it" has quietly become "run
+// the workflow twice", which is the exact failure Milestone 5 spent a milestone
+// learning to avoid.
+//
+// So the position now, precisely:
+//
+//   - **One inference call is still safe to retry.** It reads and produces tokens.
+//     Nothing else. Retrying it inside the provider costs compute and nothing more.
+//   - **A tool-using conversation is not**, once a [Write] tool has run. The world has
+//     already moved, and it does not roll back because the third turn timed out. That
+//     is [ErrEffectsCommitted], and it is terminal, in exactly the way that
+//     [ErrStreamBroken] is terminal once a token has escaped to the caller.
+//
+// The shape of the mistake is worth keeping. The claim was not carelessly made; it was
+// *true when it was made*, and it stopped being true because the system grew a
+// capability that the claim had never been tested against. That is how load-bearing
+// assumptions rot: not by being wrong, but by being outlived.
+//
+// # The other one that will bite you
+//
+// Once a stream has emitted a token, it can no longer be retried. The caller has
+// already seen half an answer; retrying would send them a second beginning. See
+// [Provider.Stream].
 package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -161,6 +201,66 @@ var (
 	// hands you under load. Collapsing the two would make an alert on "the model
 	// provider is down" fire every time the platform got busy.
 	ErrThrottled = errors.New("llm provider is throttling us")
+
+	// --- added in Milestone 9, by asking the model to DO things ----------------
+	//
+	// Milestone 8 grew this vocabulary. Milestone 9 grows the interface itself, and
+	// these five errors are the shape of that growth.
+
+	// ErrUnsupported means the provider cannot do what was asked: tool use, a
+	// structured schema, or reasoning.
+	//
+	// This exists because the alternative is so much worse. A 3B local model handed a
+	// JSON schema does not refuse — it produces something that *looks* like JSON, with
+	// the right keys and invented values, and it does it with total confidence. A model
+	// handed tools it does not support ignores them and answers from memory.
+	//
+	// It is the silent-truncation trap (see ErrContextExceeded) wearing different
+	// clothes: the failure mode of asking a model for a capability it does not have is
+	// not an error, it is a plausible wrong answer. So the platform refuses to ask.
+	ErrUnsupported = errors.New("the provider does not support this")
+
+	// ErrSchemaViolation means the model's JSON did not satisfy the schema: a missing
+	// required field, a string where an integer belongs, an invented argument.
+	//
+	// It is a normal event, not an exceptional one. It is what a language model
+	// producing structured output does some of the time, and a system that treats it as
+	// a crash is a system that falls over on a Tuesday.
+	ErrSchemaViolation = errors.New("the model's output did not match the schema")
+
+	// ErrToolLoop means the tool loop hit its iteration bound without the model
+	// finishing.
+	//
+	// Usually the model is stuck: calling the same tool with the same arguments, or
+	// ping-ponging between two. The bound exists because the failure mode of an
+	// unbounded loop on a per-token API is not a hang — it is a bill.
+	ErrToolLoop = errors.New("the tool loop did not converge")
+
+	// ErrToolFailed means a TOOL failed — the platform's own code, not the model's.
+	//
+	// The distinction matters for who gets paged. The model did nothing wrong; our
+	// workflow engine was down. A tool error is normally handed back to the model to
+	// recover from (see ToolResult.IsError); this error is for when the runner itself
+	// cannot even do that.
+	ErrToolFailed = errors.New("a tool failed to run")
+
+	// ErrEffectsCommitted means the inference failed AFTER a Write tool had already
+	// changed something.
+	//
+	// It is the exact analogue of ErrStreamBroken, and it is the most important thing
+	// this milestone learned.
+	//
+	// Milestones 7 and 8 both said, in bold, that a retry is safe here: generation has
+	// no side effects, so the worst case is paying for the compute twice. That was true
+	// of a model that only produces tokens. It is FALSE of a model that can call
+	// run_workflow — because now an inference can trigger an n8n run and open a pull
+	// request, and "just retry it" means running the workflow twice, which is precisely
+	// the failure Milestone 5 spent a milestone learning to avoid.
+	//
+	// So a loop that fails after a Write tool has run is terminal, exactly as a stream
+	// that fails after a token has escaped is terminal. The caller has to be told that
+	// the world already moved.
+	ErrEffectsCommitted = errors.New("the inference failed after a tool had already changed something")
 )
 
 // Role is who is speaking in a chat-shaped request.
@@ -173,9 +273,52 @@ const (
 )
 
 // Message is one turn.
+//
+// Milestone 9 gave it three more fields, and each one is a thing a tool-using
+// conversation cannot be correct without.
 type Message struct {
 	Role    Role   `json:"role"`
 	Content string `json:"content"`
+
+	// ToolCalls are what an assistant message ASKED for. They must be replayed on the
+	// next turn: the model's own request is part of the conversation it is reasoning
+	// about, and dropping it produces a model that cannot remember what it just did.
+	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
+
+	// ToolResults are what the platform ran, and belong on the user turn that follows.
+	ToolResults []ToolResult `json:"toolResults,omitempty"`
+
+	// Reasoning is the model's thinking, when reasoning is enabled.
+	//
+	// It has to be carried back on the next turn, VERBATIM AND INCLUDING ITS SIGNATURE.
+	// That is not an optimisation; Bedrock rejects the request without it. See
+	// [ReasoningBlock] for why an opaque blob of provider state ended up in the
+	// platform's own vocabulary, which is not a decision I enjoyed making.
+	Reasoning *ReasoningBlock `json:"reasoning,omitempty"`
+}
+
+// ReasoningBlock is the model's thinking, and the platform's least favourite struct.
+//
+// Text is the reasoning. Signature is an opaque, provider-issued token that proves the
+// reasoning has not been tampered with — and Bedrock will refuse the *next* turn of a
+// tool-using conversation if it is missing or altered.
+//
+// So the platform is obliged to carry a piece of state it cannot read, cannot verify and
+// cannot construct, purely to hand it back. It is a leak: nothing else in `llm` is opaque
+// provider data. The alternatives were worse — drop it, and reasoning + tools cannot be
+// combined at all; hide it inside the bedrock package, and the *conversation* (which
+// lives here) would no longer be a complete description of itself.
+//
+// It is at least an honest leak: the field says exactly what it is.
+type ReasoningBlock struct {
+	Text string `json:"text"`
+
+	// Signature is echoed back untouched. Never log it, never edit it, never generate one.
+	Signature string `json:"-"`
+
+	// Redacted carries thinking the provider encrypted rather than showed us. It is
+	// still echoed back.
+	Redacted []byte `json:"-"`
 }
 
 // Options are the generation knobs every provider has some version of. They are
@@ -232,6 +375,37 @@ type Request struct {
 	// generation is a mystery rather than a step in something.
 	CorrelationID       string
 	WorkflowExecutionID string
+
+	// --- Milestone 9 ---------------------------------------------------------
+
+	// Tools the model may call. Normally set by [Service.Converse] from the runner,
+	// not by a caller.
+	Tools []ToolSpec
+
+	// ToolChoice forces a tool. Empty means the model decides, which is what you want
+	// almost always; naming one is how [Structured] guarantees a schema-shaped answer.
+	ToolChoice string
+
+	// Reasoning asks the model to think before answering.
+	//
+	// It is not free and it is not always better. Reasoning tokens are billed as OUTPUT
+	// tokens — the most expensive kind — and they count against MaxTokens, so a
+	// reasoning model given a small budget will think carefully and then get cut off
+	// mid-sentence. Turn it on for work that is actually hard, and leave it off for
+	// "summarise this diff", where it buys nothing and costs several times the price.
+	Reasoning *ReasoningConfig
+
+	// PromptVersion identifies the prompt that produced this request, so a log line can
+	// answer "which version of the prompt wrote this?". See internal/prompt.
+	PromptVersion string
+}
+
+// ReasoningConfig turns on extended thinking.
+type ReasoningConfig struct {
+	// BudgetTokens is how much the model may spend thinking. It must be less than
+	// Options.MaxTokens, because thinking comes out of the same budget as the answer —
+	// which is the single easiest way to get a beautifully-reasoned empty response.
+	BudgetTokens int
 }
 
 // Validate reports whether the request can be sent.
@@ -252,15 +426,44 @@ func (r Request) Validate() error {
 
 // Input returns everything the model will read, for size checks. It is not for
 // logging: see the note on [Usage].
+//
+// It counts the tool schemas and the tool results, and it must. In a tool loop the
+// conversation grows every turn — the model's requests, the results we handed back, all of
+// it re-sent — and a context check that only measured the original prompt would pass
+// happily on turn one and let the model be silently truncated on turn six, which is
+// exactly the failure ErrContextExceeded exists to prevent.
 func (r Request) Input() string {
-	if r.Prompt != "" {
-		return r.System + "\n" + r.Prompt
-	}
 	var b strings.Builder
 	b.WriteString(r.System)
+
+	for _, t := range r.Tools {
+		b.WriteString("\n")
+		b.WriteString(t.Name)
+		b.WriteString(t.Description)
+		if schema, err := json.Marshal(t.Schema); err == nil {
+			b.Write(schema)
+		}
+	}
+
+	if r.Prompt != "" {
+		b.WriteString("\n")
+		b.WriteString(r.Prompt)
+		return b.String()
+	}
+
 	for _, m := range r.Messages {
 		b.WriteString("\n")
 		b.WriteString(m.Content)
+		for _, c := range m.ToolCalls {
+			b.WriteString(c.Name)
+			b.Write(c.Arguments)
+		}
+		for _, res := range m.ToolResults {
+			b.WriteString(res.Content)
+		}
+		if m.Reasoning != nil {
+			b.WriteString(m.Reasoning.Text)
+		}
 	}
 	return b.String()
 }
@@ -292,11 +495,27 @@ type Response struct {
 	Duration time.Duration
 	Attempts int
 
-	// FinishReason is why generation stopped: "stop", "length", "stop-sequence".
+	// FinishReason is why generation stopped: "stop", "length", "stop-sequence",
+	// and — new in Milestone 9 — "tool_use".
+	//
 	// "length" is worth noticing — it means the answer was CUT OFF, and a truncated
 	// blog post looks a lot like a finished one until someone reads the end.
+	//
+	// "tool_use" means the model did not finish at all: it stopped to ask for something.
+	// A caller that treats it as an answer gets an empty string and no explanation.
 	FinishReason string
+
+	// ToolCalls are what the model wants run. Non-empty exactly when FinishReason is
+	// "tool_use".
+	ToolCalls []ToolCall
+
+	// Reasoning is the model's thinking, if it was asked for. Carry it into the next
+	// turn — see [ReasoningBlock].
+	Reasoning *ReasoningBlock
 }
+
+// WantsTools reports whether the model stopped to ask for a tool rather than answering.
+func (r Response) WantsTools() bool { return len(r.ToolCalls) > 0 }
 
 // Chunk is a piece of a streamed response.
 type Chunk struct {
@@ -347,6 +566,39 @@ type Capabilities struct {
 	// A router weighs that against a hosted provider's per-token bill.
 	CostPer1MInputTokensUSD  float64
 	CostPer1MOutputTokensUSD float64
+
+	// --- Milestone 9: what the model can actually DO -------------------------
+	//
+	// These three are why Milestone 10's router is a router and not a load balancer.
+	// Until now the providers differed in *where they ran* and *what they cost*; now
+	// they differ in what they are capable of, and "send this to whichever is cheaper"
+	// stops being a safe thing to say. A structured-output request routed to a model
+	// that cannot produce structured output does not fail — it produces confident
+	// nonsense, which is worse.
+	//
+	// # Why these are configured and not discovered
+	//
+	// You would expect to ask the provider. You cannot: Bedrock's model catalogue
+	// (ListFoundationModels) does not report whether a model supports tool use, and
+	// Ollama's does not either. The only way to *discover* it is to send a request and
+	// see whether you get a ValidationException — which is a discovery mechanism that
+	// costs money and fails in production.
+	//
+	// So capability is asserted by configuration, and the platform REFUSES rather than
+	// discovers. That is unsatisfying, and it is the honest option.
+
+	// Tools reports whether the model can call tools.
+	Tools bool
+
+	// StructuredOutput reports whether the model can be held to a JSON schema.
+	//
+	// On Bedrock this is implemented AS tool use — a single tool, forced — so in
+	// practice it tracks Tools. It is a separate field because that is an
+	// implementation detail of one provider and not a fact about the world.
+	StructuredOutput bool
+
+	// Reasoning reports whether the model supports extended thinking.
+	Reasoning bool
 }
 
 // Provider produces tokens. It is the seam: Ollama implements it today; Bedrock

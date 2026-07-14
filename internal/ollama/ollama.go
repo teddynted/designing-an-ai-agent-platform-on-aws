@@ -145,6 +145,25 @@ func (c *Client) Capabilities() llm.Capabilities {
 		// Zero: a local model has no per-token price. The cost is the instance, and it
 		// is paid whether or not a token is generated — which is exactly the trade a
 		// router (Milestone 10) will have to weigh against a hosted provider's bill.
+		// --- Milestone 9: what this model cannot do --------------------------
+		//
+		// False, and stated rather than omitted.
+		//
+		// Ollama can technically pass a tool schema to some models, and a 3B model handed
+		// one will produce something that LOOKS like a tool call. That is precisely the
+		// problem. The failure mode of a weak model given a capability it does not really
+		// have is not an error — it is confident, well-formed, invented output, which is
+		// the same trap as silent truncation (see llm.ErrContextExceeded) in different
+		// clothes.
+		//
+		// So the platform declares it false and REFUSES, rather than asking and hoping.
+		// If that is ever wrong for a specific, tested model on a specific box, it is one
+		// line to change — and it should be changed deliberately, by someone who has
+		// actually watched that model use a tool correctly, twenty times in a row.
+		Tools:            false,
+		StructuredOutput: false,
+		Reasoning:        false,
+
 		CostPer1MInputTokensUSD:  0,
 		CostPer1MOutputTokensUSD: 0,
 	}
