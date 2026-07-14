@@ -1,0 +1,20 @@
+[Unit]
+Description=AI Agent Platform — EC2 Spot interruption drain agent
+After=network-online.target
+Wants=network-online.target
+# The agent is useless without its configuration, which UserData writes at boot.
+# Requiring the file keeps a baked-but-unconfigured AMI from starting an agent
+# that would immediately die on a missing variable.
+ConditionPathExists=/etc/spot-drain.env
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/spot-drain
+# on-failure, not always: once the agent has drained, it exits 0 and must stay
+# exited. Restarting it would make it find the same notice and drain a second
+# time, uploading over the work it just saved.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
