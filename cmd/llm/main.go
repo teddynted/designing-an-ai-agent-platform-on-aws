@@ -36,6 +36,7 @@ import (
 
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/llm"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/ollama"
+	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/providers"
 )
 
 func main() {
@@ -105,27 +106,33 @@ func run(args []string) error {
 	}
 }
 
-func service(level slog.Level) (*llm.Service, ollama.Config, error) {
+// service builds whichever provider LLM_PROVIDER names.
+//
+// Note what this function does NOT do: name a vendor. Milestone 8 added Bedrock, and the
+// only line in this CLI that changed is this one — everything below still talks to an
+// llm.Service, which talks to an llm.Provider. That is the abstraction being worth the
+// trouble, rather than merely being tidy.
+//
+// It returns the provider's REDACTED configuration (not a vendor type), so `models` can
+// print what the platform is about to talk to without this file learning what a
+// bedrock.Config looks like.
+func service(ctx context.Context, level slog.Level) (*llm.Service, providers.Info, error) {
 	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	cfg, err := ollama.ConfigFromEnv()
+	provider, info, err := providers.New(ctx, log)
 	if err != nil {
-		return nil, ollama.Config{}, err
+		return nil, providers.Info{}, err
 	}
-	provider, err := ollama.New(cfg, log)
-	if err != nil {
-		return nil, ollama.Config{}, err
-	}
-	return llm.NewService(provider, log), cfg, nil
+	return llm.NewService(provider, log), info, nil
 }
 
 func models(ctx context.Context) error {
-	svc, cfg, err := service(slog.LevelWarn)
+	svc, info, err := service(ctx, slog.LevelWarn)
 	if err != nil {
 		return err
 	}
 
-	pretty, _ := json.MarshalIndent(cfg.Redacted(), "", "  ")
+	pretty, _ := json.MarshalIndent(info.Redacted, "", "  ")
 	fmt.Printf("provider: %s\n%s\n\n", svc.Provider().Name(), pretty)
 
 	list, err := svc.Models(ctx)
@@ -153,14 +160,14 @@ func models(ctx context.Context) error {
 // A model that was never pulled is a configuration error, and finding out about it while
 // a user waits is strictly worse than finding out while nobody does.
 func check(ctx context.Context) error {
-	svc, cfg, err := service(slog.LevelInfo)
+	svc, info, err := service(ctx, slog.LevelInfo)
 	if err != nil {
 		return err
 	}
-	if err := svc.EnsureModel(ctx, cfg.Model); err != nil {
+	if err := svc.EnsureModel(ctx, info.Model); err != nil {
 		return err
 	}
-	fmt.Printf("\n%s is available on %s\n", cfg.Model, cfg.BaseURL)
+	fmt.Printf("\n%s is available on %s (%s)\n", info.Model, info.Endpoint, info.Provider)
 	return nil
 }
 
@@ -191,7 +198,7 @@ func generate(ctx context.Context, args []string) error {
 	if *verbose {
 		level = slog.LevelDebug
 	}
-	svc, cfg, err := service(level)
+	svc, info, err := service(ctx, level)
 	if err != nil {
 		return err
 	}
@@ -217,9 +224,9 @@ func generate(ctx context.Context, args []string) error {
 		req.CorrelationID = fmt.Sprintf("cli-%d", time.Now().UnixNano())
 	}
 
-	stream := cfg.Stream && !*noStream
+	stream := info.Stream && !*noStream
 
-	fmt.Fprintf(os.Stderr, "\n--- %s (%s) ---\n", orDefault(*model, cfg.Model), map[bool]string{true: "streaming", false: "buffered"}[stream])
+	fmt.Fprintf(os.Stderr, "\n--- %s (%s) ---\n", orDefault(*model, info.Model), map[bool]string{true: "streaming", false: "buffered"}[stream])
 
 	var res llm.Response
 	if stream {

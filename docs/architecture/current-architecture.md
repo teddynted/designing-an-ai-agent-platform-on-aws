@@ -4,13 +4,16 @@
 > is planned. Every milestone updates this file; if it disagrees with the code, the
 > file is wrong.
 >
-> **Last updated:** Milestone 7 — Ollama Integration.
-> **Deployed:** eight CloudFormation stacks + an image pipeline, in `dev`, plus three
+> **Last updated:** Milestone 8 — Amazon Bedrock Integration.
+> **Deployed:** eight CloudFormation stacks + an image pipeline, in `dev`, plus four
 > integration layers — workflow orchestration (n8n), agent execution (OpenClaw), and
-> inference (Ollama, behind a provider abstraction).
+> inference behind **one** provider abstraction with **two** implementations: Ollama
+> (local) and Amazon Bedrock (managed), switched by `LLM_PROVIDER`.
+> **New AWS resource:** an **opt-in, model-scoped IAM policy** for Bedrock — the first
+> AWS resource an integration milestone has added, and it grants **nothing** by default.
 > **Not deployed by this repository:** n8n, OpenClaw and Ollama themselves (they live in
-> [their own repositories](../../README.md#related-repositories)). See
-> [What is not built](#what-is-not-built).
+> [their own repositories](../../README.md#related-repositories)); Bedrock is AWS's to
+> run. See [What is not built](#what-is-not-built).
 
 The other diagram sets are *snapshots* — each one froze at the milestone that wrote
 it, and they are kept that way on purpose, as the record of a decision:
@@ -24,6 +27,7 @@ it, and they are kept that way on purpose, as the record of a decision:
 | [n8n-diagrams.md](n8n-diagrams.md) | **M5** — the workflow-orchestration integration. |
 | [openclaw-diagrams.md](openclaw-diagrams.md) | **M6** — the agent-execution integration. |
 | [ollama-diagrams.md](ollama-diagrams.md) | **M7** — inference and the provider abstraction. |
+| [bedrock-diagrams.md](bedrock-diagrams.md) | **M8** — managed inference, and what a second provider did to the abstraction. |
 | **this file** | **Everything, as it exists today.** |
 
 ## 1. Runtime architecture
@@ -36,7 +40,7 @@ the same colour key.
 Note how little of it is an "AI platform" yet. This is a foundation with no workload
 on it, and the legend says so out loud rather than leaving you to infer it.
 
-![The platform as built after Milestone 7: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sit three component repositories the platform integrates with but does not deploy — self-hosted n8n for orchestration, OpenClaw for agentic execution (which calls its own model and whose output is untrusted), and Ollama for local inference, where the prompt never leaves the network; hosted inference and hybrid routing are not built yet.](platform-as-built.svg)
+![The platform as built after Milestone 7: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sit three component repositories the platform integrates with but does not deploy — self-hosted n8n for orchestration, OpenClaw for agentic execution (which calls its own model and whose output is untrusted), and Ollama for local inference, where the prompt never leaves the network; a fourth integration, Amazon Bedrock, is drawn inside the AWS region but outside the VPC, reached over SigV4-signed HTTPS with no stored credential and permitted by an opt-in IAM policy that names the models it may invoke, and it is the one path where the prompt does leave the network and is billed per token; choosing between the two providers per request is not built yet.](platform-as-built.svg)
 
 The same thing as a flow view — useful for seeing the two independent paths out of
 an interruption (the instance saves its own work; the account merely watches):
@@ -64,6 +68,8 @@ flowchart TB
             s3["S3 artifact bucket<br/>versioned · encrypted · TLS-only"]
             cw["CloudWatch<br/>logs + Spot metrics"]
             ami["Custom AMI + snapshot<br/>aiap-platform-v1.0.0"]
+            bedrock["Amazon Bedrock (M8)<br/>MANAGED — inside AWS,<br/>outside the VPC.<br/>the prompt LEAVES · billed per token"]
+            iampol["IAM: BedrockInvokePolicy (M8)<br/>opt-in · model-scoped<br/>grants NOTHING by default"]
         end
     end
 
@@ -74,6 +80,7 @@ flowchart TB
     n8n["self-hosted n8n<br/>ANOTHER REPOSITORY"]
     oc["OpenClaw<br/>ANOTHER REPOSITORY"]
     llm["llm.Service → Provider (M7)<br/>the platform's OWN inference<br/>validate · fit the context · log"]
+    factory{{"internal/providers (M8)<br/>LLM_PROVIDER picks ONE<br/>the only package importing two vendors"}}
     ollama["Ollama<br/>ANOTHER REPOSITORY<br/>LOCAL — the prompt does not leave"]
 
     ec2 --- ebs
@@ -90,7 +97,10 @@ flowchart TB
     ag -->|"HTTPS + token · idempotency key<br/>· mandatory budget"| oc
     oc -->|"the AGENT'S own model calls —<br/>the platform is NOT in this path"| ollama
     n8n -->|"single-shot work:<br/>summarise · release notes"| llm
-    llm -->|"streaming · stall-detected<br/>· prompt never logged"| ollama
+    llm --> factory
+    factory -->|"LLM_PROVIDER=ollama<br/>(the default)"| ollama
+    factory -->|"LLM_PROVIDER=bedrock<br/>SigV4 · NO stored credential"| bedrock
+    iampol -.->|"permits · names the models"| bedrock
     llm -.->|"structured logs"| cw
     oc -.->|"output — UNTRUSTED,<br/>validated before use"| ag
     wf -.->|"structured logs"| cw
@@ -99,12 +109,12 @@ flowchart TB
     classDef aws fill:#FF9900,stroke:#232F3E,color:#232F3E
     classDef store fill:#3F8624,stroke:#243B0B,color:#FFFFFF
     classDef ext fill:#E8E8E8,stroke:#666,color:#232F3E
-    class ec2,l1,l2,dispatch,rules,defbus,platbus,wf,ag,llm aws
+    class ec2,l1,l2,dispatch,rules,defbus,platbus,wf,ag,llm,factory,bedrock,iampol aws
     class s3,cw,ami,ebs store
     class ssm,n8n,oc,ollama ext
 ```
 
-**The four facts this diagram is really carrying:**
+**The five facts this diagram is really carrying:**
 
 1. **Nothing durable lives on the instance.** The root volume is deleted on
    termination, so anything that must survive goes to S3 — which is why the drain
@@ -113,7 +123,8 @@ flowchart TB
    arrive through SSM Session Manager.
 3. **n8n and OpenClaw are drawn outside the account on purpose.** Milestones 5 and 6
    added *integrations*, not infrastructure — between them they create **no AWS
-   resources**. Both engines are deployed, versioned and backed up by
+   resources**. (Milestone 8 is the first integration that creates one: an IAM managed
+   policy. It is opt-in, model-scoped, and grants nothing until you name a model.) Both engines are deployed, versioned and backed up by
    [their own repositories](../../README.md#related-repositories); this one owns only
    the contracts. Neither integration has a **caller deployed yet**: the webhook handler
    is Milestone 12, so today they are exercised by
@@ -126,6 +137,13 @@ flowchart TB
    needed. That is the inference plane, and it is
    [a correction to what Milestone 6 said](../../INFERENCE.md#wait--milestone-6-said-the-platform-calls-no-model),
    not a contradiction of it.
+5. **Bedrock is inside the region and outside the VPC, and that is the whole point of
+   drawing it there.** It is the one arrow on this diagram where **the prompt leaves the
+   network** — into AWS, in your account's region, but *out*. That is the deal, it should
+   be a decision rather than a default, and it is why `LLM_PROVIDER` defaults to `ollama`
+   and why `Capabilities.Local` is a first-class field. It is also the only arrow that is
+   **billed per token**: everything else on this diagram costs the same whether it runs
+   once or a thousand times.
 
 ## 2. The stacks, and the one thing that is not a stack
 
@@ -249,12 +267,13 @@ flowchart TB
     m5["M5 · n8n integration<br/>the platform can now ORCHESTRATE<br/>trigger · authenticate · retry · correlate"] --> m6
     m6["M6 · OpenClaw integration<br/>the platform can now DELEGATE WORK<br/>submit · track · cancel · budget · validate"] --> m7
     m7["M7 · Ollama + provider abstraction<br/>the platform can now THINK, locally<br/>streaming · stall-detected · prompt never leaves<br/>(an errand is not a function call)"] --> m8
+    m8["M8 · Amazon Bedrock<br/>the platform can now CHOOSE ITS BRAIN<br/>one env var · IAM, no key · throttled ≠ down<br/>(a sample of one is not an abstraction)"] --> m9
 
-    m8["M8 · Bedrock<br/>the same interface, hosted"]:::next
+    m9["M9 · Claude<br/>a third provider, a third auth model"]:::next
 
     classDef done fill:#3F8624,stroke:#243B0B,color:#FFFFFF
     classDef next fill:#E8E8E8,stroke:#666,color:#232F3E,stroke-dasharray: 5 5
-    class m1,m2,m3,m4,m5,m6,m7 done
+    class m1,m2,m3,m4,m5,m6,m7,m8 done
 ```
 
 The dependency between them is not arbitrary, and it is the argument of the whole
@@ -268,6 +287,17 @@ series so far:
 
 Immutable infrastructure needs all three. Any one of them alone is a slogan.
 
+The same shape repeats in the inference plane, one milestone later:
+
+- **M7 declared the provider abstraction** — an interface with one implementation. That
+  was a claim, not yet an abstraction.
+- **M8 tested the claim** by writing the second implementation. The *interface* survived
+  untouched; the *error vocabulary* did not, because it had been designed against a
+  provider with no auth, no quotas and no entitlements.
+
+**You cannot design an abstraction from a sample of one** — you can only describe that
+one. Which is why the second provider comes before the router, and not after it.
+
 ## What is not built
 
 Being explicit, because the [M1 target architecture](diagrams.md) shows a great deal
@@ -277,21 +307,26 @@ more than this:
 | --- | --- |
 | n8n and OpenClaw **deployments** | ➡️ Not ours. Owned by [their own repositories](../../README.md#related-repositories). This one owns the **integrations** — the contracts, not the instances. |
 | The webhook handler that calls them | ❌ Not built (M12). `cmd/workflow` and `cmd/agent` are the reference callers in the meantime. |
-| Hosted inference (Bedrock, Claude) | ❌ Not built (M8, M9). The `llm.Provider` interface exists for them. |
-| **Hybrid routing** | ❌ Not built (M10). `Capabilities{Local, cost, context}` exists so a router has facts to route on. |
+| Managed inference (Bedrock) | ✅ **Built (M8).** A second `llm.Provider`, switched by `LLM_PROVIDER`. Its IAM policy is opt-in and grants nothing by default. |
+| Hosted inference (Claude) | ❌ Not built (M9). The `llm.Provider` interface exists for it — and now has two implementations rather than one. |
+| **Hybrid routing** | ❌ Not built (M10). `Capabilities{Local, cost, context}` exists so a router has facts to route on — and, since M8, **two providers that answer it differently**. Today the choice is made once, at start-up, by an environment variable. |
+| **Failover** — Spot GPU interrupted → Bedrock | ❌ Not built (M10). Both halves now exist ([the interruption](../../infra/SPOT.md), and a managed provider); nothing yet *switches* between them mid-flight. |
 | RAG, vector store, prompt versioning | ❌ Not built. |
-| Any model inference | ❌ None. No GPU instance runs (cost + quota). |
-| Bedrock / Claude routing | ❌ Not built. |
+| Any model inference **on our own hardware** | ❌ None. No GPU instance runs (cost + quota). Bedrock needs none — which is exactly its appeal, and exactly its bill. |
 | Auto Scaling group | ❌ Still **one** instance. The launch template is ready for it (M19). |
 | Private subnets / NAT | ❌ Public subnet only, deliberately (no $32/mo NAT). |
 | Alarms + dashboards | ❌ Metrics and logs exist; nothing alerts on them (M15). |
 | Scheduled AMI rebuilds | ❌ Manual. A baked image gets staler every day. |
 
-The honest summary: **the platform can now orchestrate work, delegate it to an agent,
-and think for itself — on a model it runs, with the prompt never leaving the network.**
-What it still cannot do is *choose*: every inference goes to the one local model, whether
-or not that is the right one for the job. Milestone 8 adds a hosted provider; Milestone
-10 is what decides between them.
+The honest summary: **the platform can now orchestrate work, delegate it to an agent, and
+think for itself — on a model it runs, or a model AWS runs, switched by one environment
+variable.** What it still cannot do is *choose per request*: every inference in a given
+deployment goes to whichever provider was configured at start-up, whether or not that is
+the right one for **this** job. A 3B local model is excellent at summarising a diff and
+confidently wrong about whether an architecture is sound; the point of having two
+providers is to send each kind of work to the right one. **That decision is Milestone
+10** — and it is only possible now that two providers exist and answer `Capabilities()`
+differently.
 
 ## Keeping this file current
 

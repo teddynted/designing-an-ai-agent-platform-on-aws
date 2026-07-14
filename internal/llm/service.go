@@ -282,6 +282,18 @@ func Kind(err error) string {
 		return "context_exceeded"
 	case errors.Is(err, ErrInvalidRequest):
 		return "invalid_request"
+	case errors.Is(err, ErrModelAccessDenied):
+		// Before ErrUnauthorized: "you may not use this model" is a far more specific
+		// and actionable fact than "your credentials were rejected", and an alert that
+		// collapsed them would send someone to look at IAM when the fix is an
+		// entitlement.
+		return "model_access_denied"
+	case errors.Is(err, ErrUnauthorized):
+		return "unauthorized"
+	case errors.Is(err, ErrThrottled):
+		// Not "unavailable". The provider is fine; we are over quota. An alert on
+		// "the model provider is down" must not fire every time the platform is busy.
+		return "throttled"
 	case errors.Is(err, ErrStalled):
 		return "stalled"
 	case errors.Is(err, ErrTimeout):

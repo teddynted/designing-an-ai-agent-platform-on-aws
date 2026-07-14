@@ -42,7 +42,12 @@ var seams = []struct {
 	{"workflow", "n8n", "n8n (M5)"},
 	{"agent", "openclaw", "OpenClaw (M6)"},
 	{"llm", "ollama", "Ollama (M7)"},
+	{"llm", "bedrock", "Amazon Bedrock (M8)"},
 }
+
+// factory is the one package allowed to know that more than one vendor exists. It is a
+// leaf: it imports the vendors, and nothing imports it except a main.
+const factory = "providers"
 
 // TestTheCoreNeverDependsOnItsVendor is the mechanical test that the seams are real.
 //
@@ -164,4 +169,47 @@ func hasDot(path string) bool {
 		}
 	}
 	return false
+}
+
+// TestOnlyTheFactoryKnowsAboutMoreThanOneVendor is the rule that makes "switch providers
+// through configuration, not code" true rather than aspirational.
+//
+// Milestone 8 added a second LLM provider, which means something, somewhere, has to hold
+// the list. The danger is that it ends up in several somewheres: a caller that imports
+// bedrock "just for the config type", a Service that special-cases Ollama. Do that and the
+// platform is not provider-agnostic, it merely has two providers.
+//
+// So exactly ONE package may import more than one vendor — internal/providers — and it is
+// a leaf that nothing but a main depends on. Everything else takes an llm.Provider.
+func TestOnlyTheFactoryKnowsAboutMoreThanOneVendor(t *testing.T) {
+	vendors := map[string]bool{}
+	for _, seam := range seams {
+		vendors[module+seam.client] = true
+	}
+
+	for _, pkg := range []string{"llm", "workflow", "agent", "httpx"} {
+		deps := transitiveImports(t, module+pkg)
+
+		var found []string
+		for vendor := range vendors {
+			if deps[vendor] {
+				found = append(found, vendor)
+			}
+		}
+		if len(found) > 0 {
+			t.Errorf("internal/%s imports vendor packages %v — only internal/%s may know which "+
+				"providers exist; everything else takes the interface",
+				pkg, found, factory)
+		}
+	}
+
+	// And the factory must genuinely reach both LLM providers, or "switch by configuration"
+	// is a claim with nothing behind it.
+	deps := transitiveImports(t, module+factory)
+	for _, vendor := range []string{"ollama", "bedrock"} {
+		if !deps[module+vendor] {
+			t.Errorf("internal/%s does not import internal/%s — it is supposed to be the one "+
+				"place that can build any configured provider", factory, vendor)
+		}
+	}
 }
