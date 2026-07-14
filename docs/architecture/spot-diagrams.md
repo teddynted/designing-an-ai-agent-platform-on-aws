@@ -10,6 +10,10 @@
 > [Reducing AI Infrastructure Costs with EC2 Spot Instances](../blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md),
 > and the operational reference, [SPOT.md](../../infra/SPOT.md).
 
+> **This is a snapshot of Milestone 3.** It is kept as it was written — the record of a
+> decision at a point in time. For what is deployed **today**, see
+> **[The Platform As Built](current-architecture.md)**, the living diagram.
+
 Five diagrams. They share the vocabulary and colour key of the
 [Milestone 2 diagrams](infrastructure-diagrams.md) (compute = orange,
 storage = green).

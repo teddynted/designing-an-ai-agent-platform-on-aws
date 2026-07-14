@@ -213,10 +213,20 @@ scalability models — is documented in the Milestone 1 deliverables:
 - 🗺️ **[AWS architecture diagram](docs/architecture/aws-architecture.svg)** — the AWS service view above (Cloud / Region / VPC / subnets)
 - 📐 **[Architecture diagrams](docs/architecture/diagrams.md)** — the service view plus four Mermaid flow views (high-level, event flow, component interaction, deployment boundaries)
 
-These are design documents from Milestone 1. What is actually deployed today is
-the foundation described in [What exists today](#what-exists-today) — a narrower
-thing than the diagram above, and the diagram is the target it is being built
-towards.
+These are design documents from Milestone 1: the diagram above is the **target**,
+and most of it (n8n, OpenClaw, Ollama, Bedrock routing) is still unbuilt.
+
+### What is actually deployed (Milestones 2–4)
+
+The diagram above is the **target**. This is the **present** — the same AWS service
+view, drawn for what really exists in the account today:
+
+![The platform as built after Milestone 4: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager, there is no inbound access, and no AI workload is deployed.](docs/architecture/platform-as-built.svg)
+
+> 🗺️ **[The Platform As Built](docs/architecture/current-architecture.md)** — the
+> living diagram set (runtime topology, stack map, the life of one instance),
+> updated every milestone. The gap between it and the target above is the roadmap,
+> and it is deliberately visible.
 
 ## Cost optimization with EC2 Spot
 

@@ -9,6 +9,10 @@
 > [Optimizing EC2 Spot Instance Startup with Custom AMIs](../blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md),
 > and the operational reference, [AMI.md](../../infra/AMI.md).
 
+> **This is a snapshot of Milestone 4.** It is kept as it was written — the record of a
+> decision at a point in time. For what is deployed **today**, see
+> **[The Platform As Built](current-architecture.md)**, the living diagram.
+
 Five diagrams, sharing the colour key of the
 [Milestone 2](infrastructure-diagrams.md) and [Milestone 3](spot-diagrams.md)
 sets (compute = orange, storage = green, failure = red).

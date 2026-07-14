@@ -42,6 +42,18 @@ did no work at all. See **[AMI.md](AMI.md)**.
 > `InstanceType` / `PurchaseOption` and requesting the matching quota. See
 > [Cost](#cost) and [Troubleshooting](#troubleshooting).
 
+## Architecture
+
+![The platform as built after Milestone 4: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager, there is no inbound access, and no AI workload is deployed.](../docs/architecture/platform-as-built.svg)
+
+> 🗺️ **[The Platform As Built](../docs/architecture/current-architecture.md)** — the
+> living diagram set: every stack, the image pipeline, the runtime topology, and the
+> life of a single instance from build to interruption. Updated every milestone.
+
+Per-milestone snapshots: [M2 infrastructure](../docs/architecture/infrastructure-diagrams.md) ·
+[M3 Spot](../docs/architecture/spot-diagrams.md) ·
+[M4 AMIs](../docs/architecture/ami-diagrams.md)
+
 ## Repository layout
 
 ```text

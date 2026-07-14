@@ -3,9 +3,21 @@
 > **Milestone 2 — CloudFormation Infrastructure.**
 > These diagrams describe infrastructure defined in
 > [`infra/cloudformation`](../../infra/cloudformation) and validated with
-> `cfn-lint`. It has **not been deployed** to a live account as part of this
-> milestone. They accompany the blog post,
+> `cfn-lint`. They accompany the blog post,
 > [Provisioning an AI Agent Platform with CloudFormation](../blog/provisioning-an-ai-agent-platform-with-cloudformation.md).
+>
+> **This is a snapshot of Milestone 2, kept as it was.** It is deliberately not
+> rewritten as the platform grows — it is the record of what was decided, and why,
+> at that point. Two things have changed since:
+>
+> - The stacks **are** now deployed to a live account (they were not when this was
+>   written), by CI, over OIDC.
+> - There are **eight** stacks now, not six: `07-scheduler` and `08-spot` arrived
+>   with Milestone 3, and Milestone 4 added an AMI pipeline that is not a stack at
+>   all.
+>
+> For what is deployed **today**, see
+> **[The Platform As Built](current-architecture.md)** — the living diagram.
 
 Four diagrams: two AWS-style service views (hand-authored SVG, in the same
 version-controlled approach as [Milestone 1](aws-architecture.svg)), and two
@@ -105,3 +117,12 @@ These diagrams, the [templates](../../infra/cloudformation), and the
 use the same stack numbering (01–06) and the same resource names. The Milestone 1
 [platform diagrams](diagrams.md) show where this foundation sits in the larger
 three-plane architecture.
+
+**What changed after this milestone** — follow the story forward:
+
+- [Spot diagrams](spot-diagrams.md) (M3) — the drain agent and the interruption
+  handlers that make the disposable instance *safe*.
+- [AMI diagrams](ami-diagrams.md) (M4) — the image pipeline that makes replacing it
+  *cheap* (76s → 6.2s).
+- [**The Platform As Built**](current-architecture.md) — everything above, as it
+  actually exists today.
