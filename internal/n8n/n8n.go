@@ -38,17 +38,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"math"
-	"math/rand"
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/httpx"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/workflow"
 )
 
@@ -114,8 +111,8 @@ func New(cfg Config, log *slog.Logger, opts ...Option) (*Client, error) {
 			// a caller's own deadline can shorten it but never lengthen it.
 			Transport: transport,
 		},
-		sleep:  sleepCtx,
-		jitter: fullJitter,
+		sleep:  httpx.SleepCtx,
+		jitter: httpx.FullJitter,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -202,11 +199,17 @@ func (c *Client) Trigger(ctx context.Context, req workflow.Request) (workflow.Re
 	url := c.cfg.BaseURL + path
 
 	var result workflow.Result
-	var lastErr error
 
-	for attempt := 1; attempt <= c.cfg.RetryAttempts; attempt++ {
-		result.Attempts = attempt
-
+	// The retry mechanics are shared with the OpenClaw integration (internal/httpx);
+	// the POLICY — what is worth retrying — stays here, because only this package
+	// knows that a workflow which ran and failed must never be retried.
+	attempts, err := httpx.Do(ctx, httpx.Policy{
+		Attempts:  c.cfg.RetryAttempts,
+		Delay:     c.cfg.RetryDelay,
+		Retryable: retryable,
+		Sleep:     c.sleep,
+		Jitter:    c.jitter,
+	}, func(ctx context.Context, attempt int) error {
 		payload, err := json.Marshal(body{
 			IdempotencyKey: key,
 			CorrelationID:  req.CorrelationID,
@@ -217,47 +220,21 @@ func (c *Client) Trigger(ctx context.Context, req workflow.Request) (workflow.Re
 			Metadata:       req.Metadata,
 		})
 		if err != nil {
-			return result, fmt.Errorf("%w: encoding request: %v", workflow.ErrInvalidRequest, err)
+			return fmt.Errorf("%w: encoding request: %v", workflow.ErrInvalidRequest, err)
 		}
 
 		res, err := c.attempt(ctx, url, payload, req, key, attempt)
-		if err == nil {
-			result.Status = res.Status
-			result.ExecutionID = res.ExecutionID
-			result.Response = res.Response
-			return result, nil
+		if err != nil {
+			return err
 		}
-		lastErr = err
+		result.Status = res.Status
+		result.ExecutionID = res.ExecutionID
+		result.Response = res.Response
+		return nil
+	})
 
-		if !retryable(err) {
-			// A 401 will be a 401 next time too. Retrying it wastes the caller's
-			// deadline and, on an auth failure, may look like an attack.
-			c.log.Debug("not retrying",
-				"correlationId", req.CorrelationID, "attempt", attempt, "error", err)
-			return result, err
-		}
-		if attempt == c.cfg.RetryAttempts {
-			break
-		}
-
-		delay := c.backoff(attempt, err)
-		c.log.Warn("n8n attempt failed; retrying",
-			"correlationId", req.CorrelationID,
-			"workflow", req.Workflow,
-			"attempt", attempt,
-			"of", c.cfg.RetryAttempts,
-			"retryIn", delay.String(),
-			"error", err,
-		)
-		if err := c.sleep(ctx, delay); err != nil {
-			// The caller's deadline expired while we were waiting to retry. Report
-			// the reason we were retrying, not the sleep — the interesting failure is
-			// the one that started all this.
-			return result, fmt.Errorf("%w: %v", lastErr, err)
-		}
-	}
-
-	return result, fmt.Errorf("%w after %d attempts: %w", workflow.ErrRetriesExhausted, result.Attempts, lastErr)
+	result.Attempts = attempts
+	return result, err
 }
 
 // attemptResult is one successful round trip.
@@ -298,18 +275,12 @@ func (c *Client) attempt(ctx context.Context, url string, payload []byte, req wo
 	if err != nil {
 		return attemptResult{}, transportError(ctx, err)
 	}
-	defer func() {
-		// Drain before closing so the connection can be reused: a body left
-		// unread is a connection thrown away, and under retry pressure that is
-		// exactly when you want the pool.
-		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, c.cfg.MaxResponseBytes))
-		_ = res.Body.Close()
-	}()
+	// Drain so the connection can be reused, and read a BOUNDED amount: an engine
+	// that answers with a gigabyte must not be able to take this process down.
+	// Both live in httpx now, because the OpenClaw client needs them too.
+	defer httpx.Drain(res, c.cfg.MaxResponseBytes)
 
-	// Read a bounded amount. An engine that answers with a gigabyte — because it
-	// is broken, or because it is not the engine — must not be able to take this
-	// process down.
-	raw, err := io.ReadAll(io.LimitReader(res.Body, c.cfg.MaxResponseBytes))
+	raw, err := httpx.ReadBounded(res.Body, c.cfg.MaxResponseBytes)
 	if err != nil {
 		return attemptResult{}, fmt.Errorf("%w: reading response: %v", workflow.ErrInvalidResponse, err)
 	}
@@ -333,18 +304,18 @@ func (c *Client) interpret(res *http.Response, raw []byte) (attemptResult, error
 
 	case res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= 500:
 		err := fmt.Errorf("%w: n8n answered %d: %s",
-			workflow.ErrUnavailable, res.StatusCode, snippet(raw))
+			workflow.ErrUnavailable, res.StatusCode, httpx.Snippet(raw))
 		// If n8n told us when to come back, believe it: it knows more about its own
 		// load than our exponent does, and ignoring Retry-After while it is asking
 		// for room is how a struggling instance gets pushed over.
-		if delay := parseRetryAfter(res.Header.Get("Retry-After")); delay > 0 {
-			return attemptResult{}, retryAfterError{error: err, delay: delay}
+		if delay := httpx.ParseRetryAfter(res.Header.Get("Retry-After")); delay > 0 {
+			return attemptResult{}, httpx.RetryAfterError{Err: err, Delay: delay}
 		}
 		return attemptResult{}, err
 
 	case res.StatusCode >= 400:
 		return attemptResult{}, fmt.Errorf("%w: n8n answered %d: %s",
-			workflow.ErrInvalidRequest, res.StatusCode, snippet(raw))
+			workflow.ErrInvalidRequest, res.StatusCode, httpx.Snippet(raw))
 	}
 
 	// 2xx. An empty body is legitimate — an n8n webhook set to "respond
@@ -358,13 +329,13 @@ func (c *Client) interpret(res *http.Response, raw []byte) (attemptResult, error
 		// answering instead of n8n. Treating it as success is how a platform ends up
 		// cheerfully reporting that it triggered workflows into a void.
 		return attemptResult{}, fmt.Errorf("%w: expected JSON, got %q: %s",
-			workflow.ErrInvalidResponse, ct, snippet(raw))
+			workflow.ErrInvalidResponse, ct, httpx.Snippet(raw))
 	}
 
 	var parsed response
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return attemptResult{}, fmt.Errorf("%w: body is not JSON: %s",
-			workflow.ErrInvalidResponse, snippet(raw))
+			workflow.ErrInvalidResponse, httpx.Snippet(raw))
 	}
 
 	// n8n returns 200 with an error in the body when a workflow throws and the
@@ -428,50 +399,6 @@ func retryable(err error) bool {
 	}
 }
 
-// backoff computes how long to wait before the next attempt: exponential, with
-// full jitter so that a fleet of handlers recovering from an n8n restart does not
-// synchronise into a thundering herd and knock it over again.
-func (c *Client) backoff(attempt int, err error) time.Duration {
-	// Honour Retry-After if n8n asked for one — it knows more about its own load
-	// than our exponent does.
-	var after retryAfterError
-	if errors.As(err, &after) && after.delay > 0 {
-		return after.delay
-	}
-	base := float64(c.cfg.RetryDelay) * math.Pow(2, float64(attempt-1))
-	const maxDelay = float64(30 * time.Second)
-	return c.jitter(time.Duration(math.Min(base, maxDelay)))
-}
-
-// retryAfterError carries a server-specified delay.
-type retryAfterError struct {
-	error
-	delay time.Duration
-}
-
-func (e retryAfterError) Unwrap() error { return e.error }
-
-// fullJitter picks uniformly in [0, d]. "Full jitter" beats the alternatives in
-// AWS's own analysis of backoff strategies, and its worst case — retrying almost
-// immediately — is exactly what you want when the outage was a blip.
-func fullJitter(d time.Duration) time.Duration {
-	if d <= 0 {
-		return 0
-	}
-	return time.Duration(rand.Int63n(int64(d) + 1))
-}
-
-func sleepCtx(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
-}
-
 // idempotencyKey is stable for a given event and workflow, by construction: the
 // same GitHub delivery, retried by us or replayed by GitHub, produces the same
 // key. Anything random here would defeat the entire purpose.
@@ -483,22 +410,6 @@ func idempotencyKey(req workflow.Request) string {
 	return req.Workflow + ":" + id
 }
 
-// snippet bounds an untrusted string before it reaches a log line. An engine that
-// answers with a megabyte of HTML should not be able to write a megabyte into
-// CloudWatch on our behalf, once per retry.
-func snippet(b []byte) string {
-	const max = 256
-	s := strings.TrimSpace(string(b))
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > max {
-		return s[:max] + "…"
-	}
-	if s == "" {
-		return "(empty body)"
-	}
-	return s
-}
-
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if strings.TrimSpace(v) != "" {
@@ -506,20 +417,4 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-// parseRetryAfter reads the header, which may be seconds or an HTTP date.
-func parseRetryAfter(h string) time.Duration {
-	if h == "" {
-		return 0
-	}
-	if secs, err := strconv.Atoi(strings.TrimSpace(h)); err == nil && secs >= 0 {
-		return time.Duration(secs) * time.Second
-	}
-	if when, err := http.ParseTime(h); err == nil {
-		if d := time.Until(when); d > 0 {
-			return d
-		}
-	}
-	return 0
 }

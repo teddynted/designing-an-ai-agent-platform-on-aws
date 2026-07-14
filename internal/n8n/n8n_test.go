@@ -552,44 +552,12 @@ func TestTheWireCarriesTheSanitisedPayload(t *testing.T) {
 }
 
 // --- backoff ----------------------------------------------------------------
-
-func TestBackoffIsExponentialAndBounded(t *testing.T) {
-	c := newTestClient(t, testConfig("https://n8n.example.com"))
-	c.cfg.RetryDelay = time.Second
-	c.jitter = func(d time.Duration) time.Duration { return d } // measure the ceiling
-
-	first := c.backoff(1, errors.New("x"))
-	second := c.backoff(2, errors.New("x"))
-	third := c.backoff(3, errors.New("x"))
-
-	if first != time.Second || second != 2*time.Second || third != 4*time.Second {
-		t.Errorf("backoff = %v, %v, %v; want 1s, 2s, 4s", first, second, third)
-	}
-	// Unbounded exponential backoff eventually waits for hours.
-	if got := c.backoff(20, errors.New("x")); got != 30*time.Second {
-		t.Errorf("backoff(20) = %v, want it capped at 30s", got)
-	}
-}
-
-// Jitter must be able to return less than the full delay: that is the entire
-// point of it. Without it, a fleet of handlers recovering from an n8n restart
-// retries in lockstep and knocks it straight back over.
-func TestFullJitterSpreadsTheHerd(t *testing.T) {
-	const d = time.Second
-	var sawShorter bool
-	for i := 0; i < 100; i++ {
-		got := fullJitter(d)
-		if got < 0 || got > d {
-			t.Fatalf("jitter produced %v, outside [0, %v]", got, d)
-		}
-		if got < d/2 {
-			sawShorter = true
-		}
-	}
-	if !sawShorter {
-		t.Error("jitter never produced a shorter delay; the herd would stay synchronised")
-	}
-}
+//
+// The backoff, the jitter and the Retry-After handling now live in internal/httpx,
+// because the OpenClaw integration needs exactly the same mechanics and a second
+// copy would drift. Their tests moved with them — see httpx_test.go. What stays
+// here is the POLICY: which failures this client considers worth retrying, which is
+// the part only this package can know.
 
 // --- engine contract --------------------------------------------------------
 
