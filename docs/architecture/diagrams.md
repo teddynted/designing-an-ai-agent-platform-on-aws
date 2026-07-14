@@ -1,9 +1,14 @@
 # Architecture Diagrams — Milestone 1
 
-> **Milestone 1 — Initial Architecture. Planning only.**
-> These diagrams describe a *proposed* architecture. Nothing here is deployed.
-> They are the visual companion to
+> **Milestone 1 — Initial Architecture. The target, not the present.**
+> These diagrams describe the *proposed* architecture: where the platform is going.
+> Most of it — n8n, OpenClaw, Ollama, Bedrock routing, the inference plane — is
+> **still not built**. They are the visual companion to
 > [Designing an AI Agent Platform on AWS](../blog/designing-an-ai-agent-platform-on-aws.md).
+>
+> For what is **actually deployed today**, see
+> **[The Platform As Built](current-architecture.md)**. The gap between these two
+> files is the roadmap, and it is deliberately visible.
 
 One platform, one vocabulary, two complementary views:
 

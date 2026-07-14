@@ -42,6 +42,16 @@ did no work at all. See **[AMI.md](AMI.md)**.
 > `InstanceType` / `PurchaseOption` and requesting the matching quota. See
 > [Cost](#cost) and [Troubleshooting](#troubleshooting).
 
+## Architecture
+
+> 🗺️ **[The Platform As Built](../docs/architecture/current-architecture.md)** — the
+> living diagram: every stack, the image pipeline, the runtime topology, and the life
+> of a single instance from build to interruption. Updated every milestone.
+
+Per-milestone snapshots: [M2 infrastructure](../docs/architecture/infrastructure-diagrams.md) ·
+[M3 Spot](../docs/architecture/spot-diagrams.md) ·
+[M4 AMIs](../docs/architecture/ami-diagrams.md)
+
 ## Repository layout
 
 ```text

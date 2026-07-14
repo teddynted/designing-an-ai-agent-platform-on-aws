@@ -213,10 +213,12 @@ scalability models — is documented in the Milestone 1 deliverables:
 - 🗺️ **[AWS architecture diagram](docs/architecture/aws-architecture.svg)** — the AWS service view above (Cloud / Region / VPC / subnets)
 - 📐 **[Architecture diagrams](docs/architecture/diagrams.md)** — the service view plus four Mermaid flow views (high-level, event flow, component interaction, deployment boundaries)
 
-These are design documents from Milestone 1. What is actually deployed today is
-the foundation described in [What exists today](#what-exists-today) — a narrower
-thing than the diagram above, and the diagram is the target it is being built
-towards.
+These are design documents from Milestone 1: the diagram above is the **target**,
+and most of it (n8n, OpenClaw, Ollama, Bedrock routing) is still unbuilt.
+
+> 🗺️ **[The Platform As Built](docs/architecture/current-architecture.md)** — the
+> living diagram of what is *actually deployed today*, updated every milestone. The
+> gap between it and the target above is the roadmap, and it is deliberately visible.
 
 ## Cost optimization with EC2 Spot
 
