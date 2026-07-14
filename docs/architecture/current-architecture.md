@@ -33,7 +33,7 @@ the same colour key.
 Note how little of it is an "AI platform" yet. This is a foundation with no workload
 on it, and the legend says so out loud rather than leaving you to infer it.
 
-![The platform as built after Milestone 4: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager, there is no inbound access, and no AI workload is deployed.](platform-as-built.svg)
+![The platform as built after Milestone 5: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sits self-hosted n8n, deployed by a separate repository, which the platform triggers over HTTPS with a token, an idempotency key and a sanitised payload; no AI workload is deployed.](platform-as-built.svg)
 
 The same thing as a flow view — useful for seeing the two independent paths out of
 an interruption (the instance saves its own work; the account merely watches):
@@ -66,6 +66,9 @@ flowchart TB
 
     ssm(["Operator → SSM Session Manager<br/>(no SSH, no key pair)"])
 
+    wf["workflow.Service → Engine (M5)<br/>Go, in THIS repository.<br/>Not an AWS resource — a library,<br/>with no caller deployed yet (M12)"]
+    n8n["self-hosted n8n<br/>ANOTHER REPOSITORY<br/>self-hosted-n8n-on-aws"]
+
     ec2 --- ebs
     subnet --> igw
     ssm -.-> ec2
@@ -75,22 +78,31 @@ flowchart TB
     defbus --> rules --> l1 & l2
     l1 & l2 -->|"re-publish"| platbus --> dispatch
     l1 & l2 --> cw
+    wf -->|"HTTPS + token · idempotency key<br/>· sanitised payload"| n8n
+    wf -.->|"structured logs"| cw
 
     classDef aws fill:#FF9900,stroke:#232F3E,color:#232F3E
     classDef store fill:#3F8624,stroke:#243B0B,color:#FFFFFF
     classDef ext fill:#E8E8E8,stroke:#666,color:#232F3E
-    class ec2,l1,l2,dispatch,rules,defbus,platbus aws
+    class ec2,l1,l2,dispatch,rules,defbus,platbus,wf aws
     class s3,cw,ami,ebs store
-    class ssm ext
+    class ssm,n8n ext
 ```
 
-**The two facts this diagram is really carrying:**
+**The three facts this diagram is really carrying:**
 
 1. **Nothing durable lives on the instance.** The root volume is deleted on
    termination, so anything that must survive goes to S3 — which is why the drain
    agent (M3) exists at all.
 2. **The instance is reachable by nobody.** No inbound rules, no SSH key. Operators
    arrive through SSM Session Manager.
+3. **n8n is drawn outside the account on purpose.** Milestone 5 added an
+   *integration*, not infrastructure — it creates **no AWS resources**. The engine is
+   deployed, versioned and backed up by
+   [`self-hosted-n8n-on-aws`](../../README.md#related-repositories); this repository
+   owns only the contract with it. And that integration has **no caller deployed yet**:
+   the webhook handler is Milestone 12, so today it is exercised by
+   [`cmd/workflow`](../../cmd/workflow) and its tests.
 
 ## 2. The stacks, and the one thing that is not a stack
 
@@ -130,6 +142,19 @@ image. It **consumes** one — that is the compute stack's `AmiId` parameter. Bu
 is a pipeline concern, consuming is an infrastructure concern, and **the AMI ID is
 the interface between them.** Keeping that seam clean is why `03-compute` neither
 knows nor cares how its image was made.
+
+**And why n8n is not on this map at all.** It is neither a stack nor a script here —
+it is *another repository's deployment*. Milestone 5 added the integration
+([`internal/workflow`](../../internal/workflow), [`internal/n8n`](../../internal/n8n))
+and **zero AWS resources**. If an n8n stack ever appears in `infra/cloudformation`,
+the boundary this repository committed to has failed:
+
+> *If a change affects more than one component, it belongs in the platform. If it
+> affects exactly one, it belongs in that component's repository.*
+
+An n8n version bump affects n8n. The shape of the JSON we send it affects everything
+that sends it — so the payload, the auth header, the retry policy and the idempotency
+key live here, and the servers do not.
 
 ## 3. The life of one instance
 
