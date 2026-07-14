@@ -44,6 +44,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/httpx"
 )
 
 // Errors the platform can act on, independently of which engine produced them.
@@ -90,7 +92,11 @@ var (
 	// ErrRetriesExhausted means we retried a retryable failure until we ran out of
 	// attempts. It always wraps the last underlying error, so errors.Is still
 	// finds the cause.
-	ErrRetriesExhausted = errors.New("retries exhausted")
+	//
+	// It IS httpx's sentinel, not a copy of it: the shared transport is what gives
+	// up, and a caller must be able to recognise that without importing the
+	// mechanism used to cross the boundary.
+	ErrRetriesExhausted = httpx.ErrRetriesExhausted
 )
 
 // Status is the outcome of an execution, as far as the platform can tell.
