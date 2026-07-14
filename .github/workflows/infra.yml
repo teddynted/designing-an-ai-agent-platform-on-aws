@@ -55,6 +55,22 @@ jobs:
       - name: Lint CloudFormation templates
         run: cfn-lint infra/cloudformation/*.yaml
 
+      # The Spot drain agent exists in two places by necessity: baked into the
+      # custom AMI, and written out at boot by an instance that has no AMI to bake
+      # it. They must be byte-identical, and a comment asking nicely is not a
+      # mechanism — so the build fails if they drift.
+      - name: Check the drain agent has not drifted
+        run: python3 infra/scripts/drain-sync.py --check
+
+      # The AMI pipeline is shell, and shell fails quietly. These scripts run
+      # unattended, as root, on a machine nobody is watching.
+      - name: Shell syntax check the AMI pipeline
+        run: |
+          for script in infra/scripts/*.sh infra/scripts/ami/*.sh; do
+            bash -n "$script" || exit 1
+          done
+          echo "all shell scripts parse"
+
       # cfn-lint checks each template in isolation, so it cannot see that one
       # stack imports a value another stack forgot to export. This does.
       - name: Check cross-stack imports resolve
@@ -143,6 +159,15 @@ jobs:
       # deploy with "There is no Spot capacity available that matches your
       # request" — a capacity problem, not a quota or price one. Leave it unset to
       # take the template's default.
+      # AWS_AMI_ID pins the custom AMI the compute stack launches from (Milestone
+      # 4). Left unset, `aws cloudformation deploy` keeps whatever the stack was
+      # last deployed with, so a merge never silently changes the image an
+      # instance is running — which is exactly the property immutable
+      # infrastructure is supposed to have.
+      #
+      # Images are built by the separate, manually-dispatched `AMI` workflow: a
+      # build is a deliberate, versioned event, not something that happens because
+      # a README changed.
       - name: Deploy all stacks
         run: >-
           make -C infra deploy
@@ -150,6 +175,7 @@ jobs:
           REGION="${{ vars.AWS_REGION }}"
           PURCHASE="${{ vars.AWS_PURCHASE_OPTION || 'spot' }}"
           INSTANCE_TYPE="${{ vars.AWS_INSTANCE_TYPE }}"
+          AMI_ID="${{ vars.AWS_AMI_ID }}"
 
       # Spot interruption handling (Milestone 3). It is deployed after the core
       # stacks, not with them: its Lambdas must be built and uploaded to the

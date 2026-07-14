@@ -1,15 +1,19 @@
 AWSTemplateFormatVersion: "2010-09-09"
 
 Description: >-
-  AI Agent Platform — Compute (Milestones 2 and 3).
-  A single, disposable EC2 Spot instance that future milestones will use to host
-  OpenClaw, Ollama, and n8n. This template provisions the instance only; it does
-  not install those applications. The instance is treated as ephemeral: its
-  encrypted root volume is deleted on termination and holds no durable state.
+  AI Agent Platform — Compute (Milestones 2, 3 and 4).
+  A single, disposable EC2 Spot instance. The instance is ephemeral: its encrypted
+  root volume is deleted on termination and holds no durable state.
   Milestone 3 adds the on-host half of Spot interruption handling — a drain agent
-  that watches the instance metadata service for the two-minute reclaim notice
-  and saves the instance's work to S3 before it is taken away. The account-side
-  half (EventBridge rules and Lambdas) is in 08-spot.yaml.
+  that watches the instance metadata service for the two-minute reclaim notice and
+  saves the instance's work to S3 before it is taken away. The account-side half
+  (EventBridge rules and Lambdas) is in 08-spot.yaml.
+  Milestone 4 adds the AmiId parameter. Given a custom AMI (built by
+  `make -C infra ami`), the instance boots from an image with the platform's
+  software already installed, and UserData collapses from installing everything to
+  configuring the few things that differ between environments. Left empty, the
+  instance falls back to the stock Amazon Linux 2023 image and installs at boot —
+  the two UserData blocks below are a before-and-after of exactly that.
 
 Parameters:
   ProjectName:
@@ -126,7 +130,31 @@ Parameters:
       interruption notice. AWS recommends every 5 seconds: the notice gives about
       120 seconds, and every second spent not noticing is a second not draining.
 
+  AmiId:
+    Type: String
+    Default: ""
+    AllowedPattern: "^(ami-[0-9a-f]{8,17})?$"
+    Description: >-
+      Custom AMI to launch from (Milestone 4). Empty — the default — falls back to
+      the stock Amazon Linux 2023 image in LatestAmiId, and the instance installs
+      everything it needs at boot.
+
+      Set it to a custom AMI (built by `make -C infra ami`) and the instance boots
+      from an image where the software is already installed: the boot stops
+      downloading packages, UserData shrinks to configuration only, and startup
+      drops from minutes to seconds. That matters most on Spot, where an instance
+      can be reclaimed two minutes after it launches — an instance that spends
+      three of those minutes installing Docker never did any work at all.
+
+      `make -C infra deploy-ami` resolves the newest AMI tagged for this project
+      and passes it here, so the ID is never hard-coded.
+
 Conditions:
+  # The image decides the boot path. With a custom AMI the software is already
+  # present and UserData only configures it; without one, UserData must install
+  # everything from scratch, on every launch.
+  HasCustomAmi: !Not [!Equals [!Ref AmiId, ""]]
+
   # Request Spot only when asked. On-demand omits InstanceMarketOptions entirely.
   UseSpot: !Equals [!Ref PurchaseOption, spot]
   # A stoppable Spot instance needs a persistent request; the disposable default
@@ -154,7 +182,10 @@ Resources:
       LaunchTemplateName: !Sub "${ProjectName}-${Environment}-lt"
       LaunchTemplateData:
         InstanceType: !Ref InstanceType
-        ImageId: !Ref LatestAmiId
+        # A custom AMI when one is given; the stock Amazon Linux 2023 image
+        # otherwise. This single choice is what decides whether the instance boots
+        # ready or boots and then starts installing.
+        ImageId: !If [HasCustomAmi, !Ref AmiId, !Ref LatestAmiId]
         # No SSH key by default, deliberately. The instance has no inbound access
         # and is managed exclusively through SSM Session Manager.
         KeyName: !If [HasSshKey, !Ref SshKeyName, !Ref "AWS::NoValue"]
@@ -197,156 +228,221 @@ Resources:
               VolumeType: gp3
               Encrypted: true
               DeleteOnTermination: true
+        # -------------------------------------------------------------------
+        # UserData. There are two of them, and the difference between them is the
+        # whole of Milestone 4.
+        #
+        # Without a custom AMI, every launch must install the platform from
+        # scratch: update the OS, pull packages over the internet, write out the
+        # drain agent. Minutes, every time, and every one of those steps is a
+        # step that can fail — on an instance that AWS may reclaim in two.
+        #
+        # With a custom AMI, all of that already happened once, at build time, on
+        # a machine nobody was waiting for. What is left is configuration: the
+        # values that differ between dev, staging and prod and therefore could
+        # never have been baked. Seconds, and nothing to download.
+        #
+        # Read the two blocks below as a before and after.
+        # -------------------------------------------------------------------
         UserData:
-          Fn::Base64: !Sub |
-            #!/bin/bash
-            set -euo pipefail
-            dnf -y update
+          Fn::Base64: !If
+            - HasCustomAmi
+            # ---------------- BAKED: configure what differs ------------------
+            - !Sub |
+                #!/bin/bash
+                set -euo pipefail
 
-            # The AWS CLI ships with Amazon Linux 2023, but the drain agent is
-            # useless without it, so do not assume.
-            command -v aws >/dev/null 2>&1 || dnf -y install awscli-2 || true
+                # Everything below is *configuration*. Not one line of it installs
+                # anything, because there is nothing left to install.
 
-            # Where a workload leaves anything worth keeping. The drain agent
-            # uploads this directory to S3 when the instance is reclaimed, so a
-            # later milestone's agent writes its output here and nowhere else.
-            install -d -m 0755 /var/lib/${ProjectName}/artifacts
-            install -d -m 0755 /etc/${ProjectName}
+                # The drain agent's code is in the image; its configuration cannot
+                # be, because the bucket and the log group differ per environment.
+                # The unit has ConditionPathExists on this file, which is why a
+                # baked-but-unconfigured image never starts a doomed agent.
+                cat > /etc/spot-drain.env <<ENV
+                ARTIFACT_BUCKET="${ProjectName}-${Environment}-artifacts-${AWS::AccountId}-${AWS::Region}"
+                ARTIFACT_DIR="/var/lib/ai-platform/artifacts"
+                DRAIN_LOG="/var/log/spot-drain.log"
+                DRAIN_UNITS="${DrainUnits}"
+                POLL_SECONDS="${DrainPollSeconds}"
+                AWS_DEFAULT_REGION="${AWS::Region}"
+                ENV
+                systemctl start spot-drain.service
 
-            # Configuration for the drain agent, kept out of the script so the
-            # script is a plain file with no templating in it. The bucket name is
-            # derived by the same naming convention the IAM stack grants against.
-            #
-            # Every value is quoted. This file is *sourced* by the agent, so an
-            # unquoted DRAIN_UNITS holding two units ("ollama.service n8n.service")
-            # would parse as an assignment followed by a command, and the agent
-            # would die on the second word — during the two minutes when it is the
-            # only thing that can save the instance's work.
-            cat > /etc/${ProjectName}/drain.env <<ENV
-            ARTIFACT_BUCKET="${ProjectName}-${Environment}-artifacts-${AWS::AccountId}-${AWS::Region}"
-            ARTIFACT_DIR="/var/lib/${ProjectName}/artifacts"
-            DRAIN_LOG="/var/log/${ProjectName}-spot-drain.log"
-            DRAIN_UNITS="${DrainUnits}"
-            POLL_SECONDS="${DrainPollSeconds}"
-            AWS_DEFAULT_REGION="${AWS::Region}"
-            ENV
+                # The CloudWatch agent is installed and configured in the image,
+                # with the log group left as a placeholder — the one thing it
+                # cannot know until it knows which environment it woke up in.
+                cwa=/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+                # Single-quoted, deliberately: the pattern is the literal string
+                # ${!LOG_GROUP} in the baked config file. In double quotes, bash
+                # would expand it to nothing before sed ever saw it, and the
+                # substitution would quietly match nothing at all.
+                # (And note the escape even here — Fn::Sub substitutes inside
+                # comments too. They are text to CloudFormation, not comments.)
+                sed -i 's|${!LOG_GROUP}|/${ProjectName}/${Environment}/platform|g' "$cwa"
+                /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+                  -a fetch-config -m ec2 -s -c "file:$cwa"
 
-            # -----------------------------------------------------------------
-            # The drain agent.
-            #
-            # This is the half of Spot interruption handling that a Lambda cannot
-            # do. When AWS decides to reclaim the instance it writes a notice to
-            # the instance metadata service and gives roughly 120 seconds. Only
-            # something running ON the instance can stop the workload cleanly and
-            # get its work off the disk before the disk goes away.
-            #
-            # The IMDS path 404s for the entire life of a healthy instance, so
-            # the "error" branch of the poll is the normal case, and a body is
-            # the exception that matters.
-            # -----------------------------------------------------------------
-            cat > /usr/local/bin/spot-drain <<'DRAIN'
-            #!/bin/bash
-            # Watch for a Spot interruption notice; drain the instance when it comes.
-            set -uo pipefail
+                echo "${ProjectName}-${Environment} ready from custom AMI at $(date -u)" \
+                  > /var/log/platform-bootstrap.log
+            # ------------- TRADITIONAL: install, then configure --------------
+            - !Sub |
+                #!/bin/bash
+                set -euo pipefail
 
-            . /etc/${ProjectName}/drain.env
+                # The slow, fragile part. It runs on every single launch, it needs
+                # the internet, and until it finishes the instance is useless.
+                dnf -y update
 
-            IMDS="http://169.254.169.254"
+                # The AWS CLI ships with Amazon Linux 2023, but the drain agent is
+                # useless without it, so do not assume.
+                command -v aws >/dev/null 2>&1 || dnf -y install awscli-2 || true
 
-            log() {
-              echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) spot-drain: $*" >> "$DRAIN_LOG"
-            }
+                # Where a workload leaves anything worth keeping. The drain agent
+                # uploads this directory to S3 when the instance is reclaimed.
+                install -d -m 0755 /var/lib/ai-platform/artifacts
 
-            # IMDSv2: every read needs a session token first.
-            imds_token() {
-              curl -sf -X PUT "$IMDS/latest/api/token" \
-                -H "X-aws-ec2-metadata-token-ttl-seconds: 300"
-            }
+                cat > /etc/spot-drain.env <<ENV
+                ARTIFACT_BUCKET="${ProjectName}-${Environment}-artifacts-${AWS::AccountId}-${AWS::Region}"
+                ARTIFACT_DIR="/var/lib/ai-platform/artifacts"
+                DRAIN_LOG="/var/log/spot-drain.log"
+                DRAIN_UNITS="${DrainUnits}"
+                POLL_SECONDS="${DrainPollSeconds}"
+                AWS_DEFAULT_REGION="${AWS::Region}"
+                ENV
 
-            imds_get() {
-              curl -sf -H "X-aws-ec2-metadata-token: $1" "$IMDS/latest/meta-data/$2"
-            }
+                # The drain agent, written out from scratch on every launch. In the
+                # baked path this file is simply already there.
+                #
+                # KEEP IN SYNC with scripts/ami/spot-drain.sh, which is the single
+                # source of truth and what the AMI bakes. `make check-drain-sync`
+                # fails the build if these two drift apart.
+                # --- BEGIN spot-drain.sh ---
+                cat > /usr/local/bin/spot-drain <<'DRAIN'
+                #!/bin/bash
+                # Watch for a Spot interruption notice; drain the instance when it comes.
+                #
+                # This is the on-host half of Spot interruption handling (Milestone 3). AWS gives
+                # roughly 120 seconds between the notice and the reclaim, and only something
+                # running on the instance can stop the workload and get its output off a disk
+                # that is about to be deleted. See infra/SPOT.md.
+                #
+                # THIS FILE IS THE SINGLE SOURCE OF TRUTH for the agent. It is:
+                #   * baked into the custom AMI (scripts/ami/provision.sh), and
+                #   * embedded verbatim in the traditional UserData (cloudformation/03-compute.yaml)
+                #     for instances launched without a custom AMI.
+                # `make check-drain-sync` fails if those two drift apart.
+                #
+                # It contains NO project- or environment-specific values, deliberately: an AMI is
+                # shared across dev, staging and prod, so everything that varies between them is
+                # configuration, read at boot from /etc/spot-drain.env, and nothing that varies is
+                # code. That is the whole boundary between what may be baked and what may not.
+                set -uo pipefail
 
-            # Everything that must happen before the instance disappears, in the
-            # order it must happen in. There is no second attempt: whatever is not
-            # done when AWS reclaims the instance is not done at all.
-            drain() {
-              notice="$1"
-              instance_id="$2"
-              log "interruption notice: $notice"
+                . /etc/spot-drain.env
 
-              # 1. Stop the workloads, so nothing is still writing while we upload.
-              #    Unquoted on purpose: the units are one space-separated string,
-              #    and the default guards against the agent dying on `set -u` if
-              #    the variable is ever absent. Nothing here may abort the drain.
-              for unit in ${!DRAIN_UNITS:-}; do
-                log "stopping $unit"
-                systemctl stop "$unit" || log "WARNING: could not stop $unit"
-              done
+                IMDS="http://169.254.169.254"
 
-              # 2. Save the work. This is the entire reason the agent exists: the
-              #    instance is disposable, its output is not.
-              if [ -d "$ARTIFACT_DIR" ] && [ -n "$(ls -A "$ARTIFACT_DIR" 2>/dev/null)" ]; then
-                log "saving artifacts to s3://$ARTIFACT_BUCKET/drain/$instance_id/"
-                aws s3 sync "$ARTIFACT_DIR" \
-                  "s3://$ARTIFACT_BUCKET/drain/$instance_id/artifacts/" --only-show-errors \
-                  && log "artifacts saved" \
-                  || log "ERROR: artifact sync failed"
-              else
-                log "no artifacts to save"
-              fi
+                log() {
+                  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) spot-drain: $*" >> "$DRAIN_LOG"
+                }
 
-              # 3. Leave a marker. Without it, a post-mortem cannot tell an
-              #    instance that drained cleanly from one that simply vanished.
-              echo "$notice" > /tmp/interruption.json
-              aws s3 cp /tmp/interruption.json \
-                "s3://$ARTIFACT_BUCKET/drain/$instance_id/interruption.json" --only-show-errors \
-                || log "ERROR: could not upload the interruption marker"
+                # IMDSv2: every read needs a session token first.
+                imds_token() {
+                  curl -sf -X PUT "$IMDS/latest/api/token" \
+                    -H "X-aws-ec2-metadata-token-ttl-seconds: 300"
+                }
 
-              log "drain complete"
-            }
+                imds_get() {
+                  curl -sf -H "X-aws-ec2-metadata-token: $1" "$IMDS/latest/meta-data/$2"
+                }
 
-            log "drain agent started; polling every $POLL_SECONDS seconds"
+                # Everything that must happen before the instance disappears, in the order it
+                # must happen in. There is no second attempt: whatever is not done when AWS
+                # reclaims the instance is not done at all.
+                drain() {
+                  notice="$1"
+                  instance_id="$2"
+                  log "interruption notice: $notice"
 
-            while true; do
-              token="$(imds_token)" || { sleep "$POLL_SECONDS"; continue; }
+                  # 1. Stop the workloads, so nothing is still writing while we upload.
+                  #    Unquoted on purpose: the units are one space-separated string, and the
+                  #    default guards against the agent dying on `set -u` if the variable is ever
+                  #    absent. Nothing here may abort the drain.
+                  for unit in ${!DRAIN_UNITS:-}; do
+                    log "stopping $unit"
+                    systemctl stop "$unit" || log "WARNING: could not stop $unit"
+                  done
 
-              # 404 until AWS issues a notice — the healthy path, every time.
-              notice="$(imds_get "$token" spot/instance-action)" || {
-                sleep "$POLL_SECONDS"
-                continue
-              }
+                  # 2. Save the work. This is the entire reason the agent exists: the instance is
+                  #    disposable, its output is not.
+                  if [ -d "$ARTIFACT_DIR" ] && [ -n "$(ls -A "$ARTIFACT_DIR" 2>/dev/null)" ]; then
+                    log "saving artifacts to s3://$ARTIFACT_BUCKET/drain/$instance_id/"
+                    aws s3 sync "$ARTIFACT_DIR" \
+                      "s3://$ARTIFACT_BUCKET/drain/$instance_id/artifacts/" --only-show-errors \
+                      && log "artifacts saved" \
+                      || log "ERROR: artifact sync failed"
+                  else
+                    log "no artifacts to save"
+                  fi
 
-              instance_id="$(imds_get "$token" instance-id)"
-              drain "$notice" "$instance_id"
-              exit 0
-            done
-            DRAIN
-            chmod 0755 /usr/local/bin/spot-drain
+                  # 3. Leave a marker. Without it, a post-mortem cannot tell an instance that
+                  #    drained cleanly from one that simply vanished.
+                  echo "$notice" > /tmp/interruption.json
+                  aws s3 cp /tmp/interruption.json \
+                    "s3://$ARTIFACT_BUCKET/drain/$instance_id/interruption.json" --only-show-errors \
+                    || log "ERROR: could not upload the interruption marker"
 
-            # Restart=on-failure, not always: once the agent has drained, it exits
-            # 0 and must stay exited. Restarting it would make it find the same
-            # notice and drain again, uploading over the work it just saved.
-            cat > /etc/systemd/system/spot-drain.service <<'UNIT'
-            [Unit]
-            Description=AI Agent Platform — EC2 Spot interruption drain agent
-            After=network-online.target
-            Wants=network-online.target
+                  log "drain complete"
+                }
 
-            [Service]
-            Type=simple
-            ExecStart=/usr/local/bin/spot-drain
-            Restart=on-failure
-            RestartSec=5
+                log "drain agent started; polling every $POLL_SECONDS seconds"
 
-            [Install]
-            WantedBy=multi-user.target
-            UNIT
+                while true; do
+                  token="$(imds_token)" || { sleep "$POLL_SECONDS"; continue; }
 
-            systemctl daemon-reload
-            systemctl enable --now spot-drain.service
+                  # 404 until AWS issues a notice — the healthy path, every time.
+                  notice="$(imds_get "$token" spot/instance-action)" || {
+                    sleep "$POLL_SECONDS"
+                    continue
+                  }
 
-            echo "${ProjectName}-${Environment} instance bootstrapped at $(date -u)" > /var/log/platform-bootstrap.log
+                  instance_id="$(imds_get "$token" instance-id)"
+                  drain "$notice" "$instance_id"
+                  exit 0
+                done
+                DRAIN
+                # --- END spot-drain.sh ---
+                chmod 0755 /usr/local/bin/spot-drain
+
+                cat > /etc/systemd/system/spot-drain.service <<'UNIT'
+                [Unit]
+                Description=AI Agent Platform — EC2 Spot interruption drain agent
+                After=network-online.target
+                Wants=network-online.target
+                # The agent is useless without its configuration, which UserData writes at boot.
+                # Requiring the file keeps a baked-but-unconfigured AMI from starting an agent
+                # that would immediately die on a missing variable.
+                ConditionPathExists=/etc/spot-drain.env
+
+                [Service]
+                Type=simple
+                ExecStart=/usr/local/bin/spot-drain
+                # on-failure, not always: once the agent has drained, it exits 0 and must stay
+                # exited. Restarting it would make it find the same notice and drain a second
+                # time, uploading over the work it just saved.
+                Restart=on-failure
+                RestartSec=5
+
+                [Install]
+                WantedBy=multi-user.target
+                UNIT
+
+                systemctl daemon-reload
+                systemctl enable --now spot-drain.service
+
+                echo "${ProjectName}-${Environment} bootstrapped at $(date -u)" \
+                  > /var/log/platform-bootstrap.log
         TagSpecifications:
           - ResourceType: instance
             Tags:
@@ -408,6 +504,19 @@ Outputs:
     Description: How the instance was purchased (spot or on-demand).
     Value: !Ref PurchaseOption
 
+  ImageId:
+    Description: The AMI the instance actually launched from.
+    Value: !If [HasCustomAmi, !Ref AmiId, !Ref LatestAmiId]
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-InstanceImageId"
+
+  BootPath:
+    Description: >-
+      Which boot path the instance took. "baked" means it launched from a custom
+      AMI and only configured itself; "install-at-boot" means it had to install
+      the platform's software on launch.
+    Value: !If [HasCustomAmi, baked, install-at-boot]
+
   DrainLog:
     Description: On-instance log the drain agent writes to.
-    Value: !Sub "/var/log/${ProjectName}-spot-drain.log"
+    Value: /var/log/spot-drain.log

@@ -53,7 +53,9 @@ SPOT_TAGS   := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Mi
 # passing a parameter to a stack that lacks it makes `aws cloudformation deploy`
 # fail. InstanceType is omitted entirely when unset, so the template's default
 # stands rather than being overridden with an empty string.
-EXTRA_03-compute := PurchaseOption=$(PURCHASE) $(if $(INSTANCE_TYPE),InstanceType=$(INSTANCE_TYPE))
+EXTRA_03-compute = PurchaseOption=$(PURCHASE) \
+	$(if $(INSTANCE_TYPE),InstanceType=$(INSTANCE_TYPE)) \
+	$(if $(AMI_ID),AmiId=$(AMI_ID))
 
 # Stack states in which the CREATE never succeeded. `aws cloudformation deploy`
 # can only update an existing stack, so a stack stuck in one of these must be
@@ -73,6 +75,7 @@ STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observabilit
 # ever running — `make deploy` would print "deployment complete" and do nothing.
 .PHONY: lambda-test lambda-vet package deploy-scheduler delete-scheduler
 .PHONY: spot deploy-spot delete-spot simulate-interruption
+.PHONY: ami ami-list ami-prune deploy-ami drain-sync check-drain-sync startup-benchmark
 .PHONY: help lint validate deploy delete outputs bootstrap install-hooks import-storage
 
 help: ## Show this help
@@ -86,7 +89,7 @@ install-hooks: ## Enable the repository's git hooks (one-time, per clone)
 	@git -C .. config core.hooksPath .githooks
 	@echo "git hooks enabled (core.hooksPath = .githooks)"
 
-lint: ## Lint every template with cfn-lint
+lint: check-drain-sync ## Lint every template with cfn-lint
 	cfn-lint $(CFN_DIR)/*.yaml
 
 validate: ## Server-side validate every template (needs AWS credentials)
@@ -234,6 +237,77 @@ deploy-scheduler: ## Deploy the instance scheduler (needs INSTANCE_ID=i-...; run
 delete-scheduler: ## Delete the instance scheduler stack
 	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-07-scheduler
 	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-07-scheduler
+
+# --- Custom AMIs (Milestone 4) ----------------------------------------------
+#
+# The AMI is built by a script, not by CloudFormation: CloudFormation has no
+# resource type that builds an image. It *consumes* one — that is what the compute
+# stack's AmiId parameter is for. Building is a pipeline concern, consuming is an
+# infrastructure concern, and the AMI ID is the interface between them.
+
+# Include Ollama in the image (~1.5 GB larger). Off until a milestone runs it.
+INSTALL_OLLAMA ?= false
+# The AMI to deploy. Empty means `deploy-ami` resolves the newest one itself, so
+# an AMI ID is never hard-coded into a command someone will copy-paste in a year.
+AMI_ID ?=
+
+# The newest AMI this project has built, by version. This is why build-ami.sh tags
+# so carefully: the tags are not documentation, they are the lookup.
+define latest_ami
+$(shell aws ec2 describe-images --owners self --region $(REGION) \
+	--filters "Name=tag:Project,Values=$(PROJECT)" "Name=tag:Component,Values=platform-ami" \
+	--query 'sort_by(Images, &CreationDate)[-1].ImageId' --output text 2>/dev/null | grep -v None)
+endef
+
+ami: ## Build a new versioned custom AMI (AMI_VERSION=x.y.z, INSTALL_OLLAMA=true)
+	@PROJECT=$(PROJECT) REGION=$(REGION) INSTALL_OLLAMA=$(INSTALL_OLLAMA) \
+		AMI_VERSION="$(AMI_VERSION)" scripts/build-ami.sh
+
+ami-list: ## List this project's custom AMIs, newest first
+	@aws ec2 describe-images --owners self --region $(REGION) \
+		--filters "Name=tag:Project,Values=$(PROJECT)" "Name=tag:Component,Values=platform-ami" \
+		--query 'reverse(sort_by(Images, &CreationDate))[].{Version:Tags[?Key==`Version`]|[0].Value,AMI:ImageId,Name:Name,Created:CreationDate,State:State}' \
+		--output table
+
+# Deregistering an AMI does NOT delete its snapshot, and the snapshot is where the
+# cost is. Pruning must remove both, or the bill keeps paying for images that no
+# longer exist. KEEP is how many recent versions to retain — never zero: the
+# previous AMI is the rollback.
+KEEP ?= 3
+ami-prune: ## Deregister old AMIs and delete their snapshots (KEEP=3 by default)
+	@ids=$$(aws ec2 describe-images --owners self --region $(REGION) \
+		--filters "Name=tag:Project,Values=$(PROJECT)" "Name=tag:Component,Values=platform-ami" \
+		--query "reverse(sort_by(Images, &CreationDate))[$(KEEP):].ImageId" --output text); \
+	[ -n "$$ids" ] || { echo "nothing to prune (keeping the newest $(KEEP))"; exit 0; }; \
+	for ami in $$ids; do \
+		snaps=$$(aws ec2 describe-images --region $(REGION) --image-ids $$ami \
+			--query 'Images[0].BlockDeviceMappings[].Ebs.SnapshotId' --output text); \
+		echo "deregistering $$ami"; \
+		aws ec2 deregister-image --region $(REGION) --image-id $$ami; \
+		for snap in $$snaps; do \
+			echo "  deleting snapshot $$snap"; \
+			aws ec2 delete-snapshot --region $(REGION) --snapshot-id $$snap || true; \
+		done; \
+	done
+
+deploy-ami: ## Deploy the compute stack onto the newest custom AMI (or AMI_ID=ami-…)
+	@ami="$(if $(AMI_ID),$(AMI_ID),$(strip $(call latest_ami)))"; \
+	[ -n "$$ami" ] || { echo "no custom AMI found — run 'make ami' first"; exit 1; }; \
+	echo "deploying compute onto $$ami"; \
+	$(MAKE) deploy-03-compute AMI_ID="$$ami"
+
+# The drain agent exists in two places by necessity: baked into the AMI, and
+# written out at boot by an instance that has no AMI to bake it. They must be
+# identical, and a comment asking nicely is not a mechanism.
+drain-sync: ## Regenerate the drain agent embedded in 03-compute.yaml
+	@python3 scripts/drain-sync.py --write
+
+check-drain-sync: ## Fail if the embedded drain agent has drifted from the canonical one
+	@python3 scripts/drain-sync.py --check
+
+startup-benchmark: ## Measure boot time: install-at-boot vs custom AMI (real launches)
+	@PROJECT=$(PROJECT) REGION=$(REGION) AMI_ID="$(if $(AMI_ID),$(AMI_ID),$(strip $(call latest_ami)))" \
+		scripts/startup-benchmark.sh
 
 # --- Spot interruption handling (Milestone 3) -------------------------------
 

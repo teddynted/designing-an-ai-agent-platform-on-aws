@@ -66,6 +66,9 @@ Resources:
             Version: "2012-10-17"
             Statement:
               # Scoped to this project's log-group namespace, not to all logs.
+              # The CloudWatch agent baked into the custom AMI (Milestone 4) ships
+              # the boot log and the drain log here — which is how you find out
+              # what happened on an instance that no longer exists to be asked.
               - Sid: WritePlatformLogs
                 Effect: Allow
                 Action:
@@ -75,6 +78,14 @@ Resources:
                 Resource:
                   - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${ProjectName}/${Environment}/*"
                   - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${ProjectName}/${Environment}/*:log-stream:*"
+              # The CloudWatch agent reads the instance's tags at startup to label
+              # its metrics and streams. DescribeTags admits no resource-level
+              # permissions, so "*" is the only expressible form — it is read-only,
+              # and it is the only EC2 permission the instance holds.
+              - Sid: ReadOwnTagsForCloudWatchAgent
+                Effect: Allow
+                Action: ec2:DescribeTags
+                Resource: "*"
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-instance-role"

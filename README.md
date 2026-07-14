@@ -4,16 +4,18 @@
 [![Milestone 1](https://img.shields.io/badge/M1%20Initial%20Architecture-documented-brightgreen)](docs/blog/designing-an-ai-agent-platform-on-aws.md)
 [![Milestone 2](https://img.shields.io/badge/M2%20CloudFormation-shipped-brightgreen)](docs/blog/provisioning-an-ai-agent-platform-with-cloudformation.md)
 [![Milestone 3](https://img.shields.io/badge/M3%20EC2%20Spot-shipped-brightgreen)](docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md)
-[![Next milestone](https://img.shields.io/badge/next-M4%20Custom%20AMIs-lightgrey)](#milestone-4--custom-amis)
+[![Milestone 4](https://img.shields.io/badge/M4%20Custom%20AMIs-shipped-brightgreen)](docs/blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md)
+[![Next milestone](https://img.shields.io/badge/next-M5%20n8n-lightgrey)](#milestone-5--self-hosted-n8n-integration)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
 > **Status: building.**
 > The foundation is real: the AWS infrastructure is
-> [CloudFormation you can deploy](infra/), and it runs its compute on
-> [EC2 Spot with interruption handling](infra/SPOT.md). Everything from
-> [Milestone 4](#milestone-4--custom-amis) on is still a statement of intent —
-> no application software (OpenClaw, Ollama, n8n) is installed yet. See
+> [CloudFormation you can deploy](infra/), it runs its compute on
+> [EC2 Spot with interruption handling](infra/SPOT.md), and that compute boots from
+> a [custom AMI in 2.5 seconds](infra/AMI.md) instead of 76. Everything from
+> [Milestone 5](#milestone-5--self-hosted-n8n-integration) on is still a statement
+> of intent — no application software (OpenClaw, Ollama, n8n) runs yet. See
 > [What exists today](#what-exists-today), which is kept honest.
 
 An open design study and reference implementation for running **autonomous AI
@@ -31,6 +33,7 @@ on a repository, and how to keep the bill and the blast radius small.
 - [Key Features (Planned)](#key-features-planned)
 - [High-Level Architecture Overview](#high-level-architecture-overview)
 - [Cost optimization with EC2 Spot](#cost-optimization-with-ec2-spot)
+- [Startup optimization with custom AMIs](#startup-optimization-with-custom-amis)
 - [Technology Stack](#technology-stack)
 - [Repository Scope](#repository-scope)
 - [Related Repositories](#related-repositories)
@@ -98,6 +101,7 @@ Being explicit, because everything else on this page is aspirational:
 | Platform architecture | 📝 **Documented** | [Milestone 1](#milestone-1--initial-architecture): the [architecture blog post](docs/blog/designing-an-ai-agent-platform-on-aws.md) and [diagrams](docs/architecture/diagrams.md) |
 | AWS infrastructure | ✅ **Implemented** | [Milestone 2](#milestone-2--cloudformation-infrastructure): VPC, IAM, EC2, S3, EventBridge, CloudWatch — eight CloudFormation stacks, deployed by CI. See [infra/](infra/) |
 | EC2 Spot + interruption handling | ✅ **Implemented** | [Milestone 3](#milestone-3--ec2-spot-instances): a drain agent on the instance, EventBridge rules and Go Lambdas in the account. See [infra/SPOT.md](infra/SPOT.md) |
+| Custom AMIs + fast startup | ✅ **Implemented** | [Milestone 4](#milestone-4--custom-amis): a versioned image pipeline. Boot measured at **2.5s**, down from **76s**. See [infra/AMI.md](infra/AMI.md) |
 | Application software (OpenClaw, Ollama, n8n) | 📋 Planned | Nothing is installed on the instance yet — [Milestone 5](#milestone-5--self-hosted-n8n-integration) onwards |
 | Every integration below | 📋 Planned | Not built |
 
@@ -382,6 +386,151 @@ Deliberately **not** built in this milestone, and each is its own piece of work:
   by failing over to Bedrock. *(Milestone 10.)*
 - **Spot placement scores** to pick the least contended AZ before launching.
 
+## Startup optimization with custom AMIs
+
+**Milestone 4.** The platform's compute boots from a **custom AMI** — an image
+where Docker, Go, Node, Python, the CloudWatch agent, and the Spot drain agent are
+already installed. It boots in **2.5 seconds** instead of **76**.
+
+> 📄 [Optimizing EC2 Spot Instance Startup with Custom AMIs](docs/blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md) — the blog post ·
+> 📐 [AMI diagrams](docs/architecture/ami-diagrams.md) ·
+> 🛠️ [AMI.md](infra/AMI.md) — the operational reference
+
+### The measured result
+
+Two `c5.xlarge` instances, same subnet, minutes apart, both running *the same*
+provisioning script — one at boot, one at build time:
+
+| | Install at boot | **Baked into an AMI** | |
+| --- | --- | --- | --- |
+| **UserData** (what the AMI removes) | 75.12 s | **0.058 s** | **~1,300× faster** |
+| **Total boot** (cloud-init, end to end) | 76.06 s | **2.54 s** | **~30× faster** |
+| Network calls during boot | many | **zero** | |
+
+**73.5 seconds removed from every launch**, bought with a **4.5-minute build that
+costs about a cent** and is paid once.
+
+That is a like-for-like comparison (both instances run the same script). The
+**deployed** instance does a little more — its UserData also starts the CloudWatch
+agent — and boots in **6.20 s**, verified on the live stack. Still **12× faster**,
+while doing more work.
+
+### Why this matters on Spot specifically
+
+A Spot instance can be reclaimed with **two minutes' notice**. An instance that
+needs 76 seconds before it can do anything spends **more than half of its eviction
+window getting ready** — and one reclaimed in that window did no work at all. It
+downloaded packages, was taken away, and left nothing behind.
+
+Baked, the instance is working within 2.5 seconds. That is the difference between
+Spot being a discount and Spot being a liability.
+
+### UserData, before and after
+
+```mermaid
+flowchart LR
+    subgraph before["Install at boot — 76 s"]
+        b1["dnf update"] --> b2["install docker, git,<br/>python, node, CW agent"] --> b3["download go, compose"] --> b4["write out the drain agent"] --> b5["configure"]
+    end
+
+    subgraph after["Baked — 2.5 s"]
+        a1["configure"]
+    end
+
+    before -->|"move the work to build time"| after
+
+    fail["every step is a download<br/>= a way to fail, silently,<br/>on an unattended boot"]:::bad
+    b2 -.-> fail
+
+    classDef bad fill:#D13212,stroke:#7D1D0C,color:#FFFFFF
+    classDef aws fill:#FF9900,stroke:#232F3E,color:#232F3E
+    classDef good fill:#3F8624,stroke:#243B0B,color:#FFFFFF
+    class b1,b2,b3,b4,b5 aws
+    class a1 good
+```
+
+The reliability win is bigger than the speed win. UserData has **no retry, no
+rollback, and nowhere good to report a failure** — if step 14 of 40 fails, the
+instance still boots, still passes its health checks, and is quietly broken. Every
+line you remove is a line that cannot fail that way, and **the baked path cannot
+fail on a package mirror because it never talks to one.**
+
+### The AMI lifecycle
+
+```bash
+cd infra
+
+make ami                              # build a versioned image (~4.5 min)
+make ami-list                         # what exists
+make deploy-ami                       # relaunch the instance onto the newest image
+make deploy-ami AMI_ID=ami-<previous> # roll back
+make ami-prune KEEP=3                 # retire old versions AND their snapshots
+make startup-benchmark                # measure it yourself, on real instances
+```
+
+Images are versioned (`aiap-platform-v1.0.0`), immutable (a version is built once
+and never rebuilt), and found by **tag**, never by an ID pasted into a runbook.
+Rollback is just the previous AMI ID — the old image still exists, exactly as it was
+when it worked.
+
+### What is baked, and what is never baked
+
+> **Bake what is the same everywhere. Configure what differs.**
+
+One image serves dev, staging and prod, so anything environment-specific stays in
+UserData. And **never bake a secret**: an AMI is a filesystem that can be copied to
+another account or made public with one API call, and nobody is watching it.
+Identity comes from the instance profile at runtime.
+
+The cleanup step before the snapshot strips credentials, SSH keys, host keys,
+`machine-id`, the SSM registration, and — the one that is silent —
+**cloud-init's state**. Bake that and cloud-init decides it has already run, so
+**UserData never runs again**: the instance boots, passes every health check, and is
+completely unconfigured, with no error anywhere.
+
+### Cost
+
+An AMI is free; **its snapshot is not**. ~30 GB ≈ **$0.75/month per version**, and
+`KEEP=3` ≈ **$2.25/month**. Snapshots are incremental within a lineage, so the real
+figure is lower. Deregistering an AMI does **not** delete its snapshot — which is
+how people "delete" images and keep paying for them. `make ami-prune` deletes both.
+
+### Immutable infrastructure
+
+**Never change a running instance. Build a new image and replace it.**
+
+On Spot this is not a philosophy, it is arithmetic: an instance you hand-fixed can
+be reclaimed two minutes later, taking the fix with it, and the replacement comes up
+from the image without it. A hotfix on ephemeral compute is a fix with a random
+expiry date that nothing records.
+
+### Screenshots
+
+<!-- Replace these placeholders with real console captures from a live deploy. -->
+
+| | |
+| --- | --- |
+| _EC2: the versioned AMIs and their tags_ | `docs/architecture/screenshots/ami-list.png` *(placeholder)* |
+| _cloud-init timings, both boot paths side by side_ | `docs/architecture/screenshots/ami-startup-benchmark.png` *(placeholder)* |
+| _The AMI build workflow run_ | `docs/architecture/screenshots/ami-workflow.png` *(placeholder)* |
+
+### Future improvements
+
+Deliberately **not** built in this milestone:
+
+- **A scheduled rebuild pipeline.** A baked image freezes the OS, so it gets
+  *staler* every day — that is the trade for determinism. Patching is now a
+  deployment, and it should be a cron job, not a human remembering. A monthly
+  rebuild-and-roll with the previous AMI as the rollback is the right shape.
+- **Auto Scaling with a mixed-instances policy.** A fast-booting image is what makes
+  an ASG *work* — the difference between replacing an interrupted instance in 76
+  seconds and in 3. *(Milestone 19.)*
+- **A minimal image.** Every package is attack surface and snapshot cost. A serving
+  image and a build image probably should not be the same image.
+- **Cross-region copies**, if the platform ever runs in more than one region.
+- **Image signing / attestation**, so a deploy can prove the image is one this
+  pipeline built.
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -573,13 +722,26 @@ flowchart TB
 
 #### Milestone 4 — Custom AMIs
 
+✅ **Shipped.**
+[Blog post](docs/blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md) ·
+[AMI.md](infra/AMI.md) ·
+[Diagrams](docs/architecture/ami-diagrams.md) ·
+[Overview](#startup-optimization-with-custom-amis)
+
 - **Objective** — Cut instance cold-start time by baking dependencies into the
   image.
-- **Primary focus** — Image pipelines, versioning, and the cold-start budget for
-  GPU inference nodes.
-- **Related technologies** — EC2 Image Builder, custom AMIs.
-- **Expected outcome** — Versioned AMIs that reduce time-to-ready, measured
-  against the unbaked baseline.
+- **Primary focus** — The image pipeline, semantic versioning and rollback, the
+  bake/configure boundary (one image serves every environment, so anything
+  environment-specific stays in UserData), and the security cleanup that must run
+  before a snapshot.
+- **Related technologies** — Custom AMIs, EC2, CloudFormation, IAM, CloudWatch Logs,
+  cloud-init, SSM RunCommand.
+- **Outcome** — Boot time **measured** at **2.54s**, down from **76.06s** — a ~30×
+  improvement, and ~1,300× on UserData alone (75.12s → 0.058s). A boot that makes
+  **zero network calls** and therefore cannot fail on a package mirror. Versioned,
+  immutable images with a one-command rollback. *EC2 Image Builder was deliberately
+  not used: the mechanics are the thing worth learning, and they are the mechanics
+  it runs on your behalf.*
 
 ### Phase 2 — Workloads
 
@@ -774,7 +936,8 @@ built, or out of order, as a set of independent AWS design studies.
 | 1 | [Designing an AI Agent Platform on AWS](docs/blog/designing-an-ai-agent-platform-on-aws.md) | M1 | ✅ Published |
 | 2 | [Provisioning an AI Agent Platform with CloudFormation](docs/blog/provisioning-an-ai-agent-platform-with-cloudformation.md) | M2 | ✅ Published |
 | 3 | [Reducing AI Infrastructure Costs with EC2 Spot Instances](docs/blog/reducing-ai-infrastructure-costs-with-ec2-spot-instances.md) | M3 | ✅ Published |
-| 4+ | One per milestone, as each is built | M4+ | 📋 Planned |
+| 4 | [Optimizing EC2 Spot Instance Startup with Custom AMIs](docs/blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md) | M4 | ✅ Published |
+| 5+ | One per milestone, as each is built | M5+ | 📋 Planned |
 
 ## Future Enhancements
 
