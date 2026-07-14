@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/bedrock v1.65.1
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.55.1
 	github.com/aws/smithy-go v1.27.3
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

@@ -219,7 +219,11 @@ func (s *Service) begin(req Request) (*slog.Logger, error) {
 	if req.PromptVersion != "" {
 		// Which version of the prompt produced this? The first question anyone asks when
 		// the output changes and nobody touched the model.
-		log = log.With("promptVersion", req.PromptVersion)
+		log = log.With(
+			"promptName", req.PromptName,
+			"promptCategory", req.PromptCategory,
+			"promptVersion", req.PromptVersion,
+		)
 	}
 
 	// The prompt is NOT logged. It contains repository content: source code, commit

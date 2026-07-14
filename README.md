@@ -1210,6 +1210,65 @@ A tool loop **re-sends the whole conversation every turn**:
 a single call. Which is what `BEDROCK_PROMPT_CACHE` is for, and why the tool list is sorted
 (an unstable prompt prefix is an uncacheable one, silently).
 
+### Structured outputs, validated before anyone believes them
+
+`Structured[T]` returns a typed Go value. But much of what a platform wants from a frontier
+model is an **artefact** — a YAML config, a Mermaid diagram, a table — and those fail
+differently:
+
+| The model produces | Where it actually breaks |
+| --- | --- |
+| YAML with a tab | **At deploy.** Hours later, in CloudFormation. |
+| An invalid Mermaid diagram | **On a rendered page.** The first person to notice is a reader. |
+| A table with one extra cell | **Never, visibly.** It renders. Slightly wrong. Forever. |
+
+In every case the log said `inference completed` and the fault surfaced somewhere else. So:
+
+> **A generation that produced invalid YAML is a FAILED generation.**
+
+```bash
+go run ./cmd/llm compose --template architecture/mermaid-diagram --format mermaid \
+    --var Subject="the tool loop"
+```
+
+```
+WARN the model produced an invalid artefact; asking it to repair
+     format=mermaid error="\"call\" is a reserved word in Mermaid and cannot be a node ID"
+--- 300 in / 60 out · MERMAID VALIDATED ---
+```
+
+The model is shown its own mistake and asked again, **once**. (That reserved-word bug is not
+hypothetical: it shipped in a diagram in this repository, and it renders as a red error box.)
+
+### Prompts are code, organised by capability
+
+```
+templates/
+  summarisation/   diff-summary · release-notes
+  structured/      change-triage · workflow-decision
+  architecture/    explain · mermaid-diagram
+  writing/         technical-doc
+  workflow/        tool-use-system      ← the system prompt for a model that can ACT
+```
+
+Organised by **capability**, not by caller: a prompt called `blog-generator-step-3` dies with
+one workflow, and `summarisation/diff-summary` is a thing the platform can *do*. Each is
+versioned by content hash and logged as `promptCategory` + `promptVersion` — so *"which prompt
+wrote this?"* is answerable, and the bill can be grouped by capability rather than by caller.
+
+```bash
+go run ./cmd/llm prompts     # the catalogue
+```
+
+### How Claude sits with the rest of the platform
+
+| | Owns | Claude's relationship to it |
+| --- | --- | --- |
+| **n8n** (M5) | **Orchestration** — what happens, in what order, and the waiting | n8n calls the platform for single-shot reasoning; Claude can also **trigger** an n8n workflow via `run_workflow` |
+| **OpenClaw** (M6) | **Agentic execution** — an errand: tools, a loop, minutes | OpenClaw calls **its own** model; the platform is *not* in that path. Claude can **submit** work to it, and the platform puts its **untrusted output** back through Claude to produce a validated result |
+| **Ollama** (M7) | **Local inference** — the prompt never leaves | The same interface. It reports `Tools: false`, so the platform **refuses** to ask it for what only Claude can do |
+| **Bedrock** (M8) | **Managed model serving** — IAM, no credential | The transport Claude arrives through. Claude is a `BEDROCK_MODEL_ID`, not a new provider |
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.

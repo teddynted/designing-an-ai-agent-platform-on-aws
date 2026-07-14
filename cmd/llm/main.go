@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/agent"
+	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/format"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/llm"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/n8n"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/openclaw"
@@ -112,6 +113,10 @@ func run(args []string) error {
 		return converse(ctx, args[1:])
 	case "triage":
 		return triage(ctx, args[1:])
+	case "compose":
+		return compose(ctx, args[1:])
+	case "prompts":
+		return listPrompts()
 	case "-h", "--help", "help":
 		usage()
 		return nil
@@ -330,6 +335,10 @@ func usage() {
   llm generate --prompt "…"      stream a completion
   llm converse --prompt "…"      let the model USE THE PLATFORM'S TOOLS  (M9)
   llm triage --diff-file f.diff  a STRUCTURED answer, not prose          (M9)
+  llm compose --template … --format mermaid|yaml|json|markdown|table     (M9)
+                                 generate an artefact, and REFUSE to return
+                                 it unless it actually parses
+  llm prompts                    the prompt catalogue, by capability      (M9)
   llm <command> -h               the flags
 
 Streaming is the default. A generation you cannot watch is indistinguishable from
@@ -436,7 +445,7 @@ func converse(ctx context.Context, args []string) error {
 		Register(tools.SubmitAgentTask(ag, platformInstructions()))
 
 	// The system prompt is versioned and lives in internal/prompt, not in this file.
-	sys := prompt.MustLoad("tool-use-system")
+	sys := prompt.MustLoad("workflow/tool-use-system")
 	system, err := sys.Render(map[string]any{
 		"Repository": *repo, "Branch": *branch, "CommitSHA": "",
 	})
@@ -445,12 +454,14 @@ func converse(ctx context.Context, args []string) error {
 	}
 
 	req := llm.Request{
-		System:        system,
-		Prompt:        *ask,
-		Purpose:       "converse",
-		CorrelationID: corr,
-		PromptVersion: sys.Version,
-		Options:       llm.Options{MaxTokens: 4096, Temperature: 0.2},
+		System:         system,
+		Prompt:         *ask,
+		Purpose:        "converse",
+		CorrelationID:  corr,
+		PromptName:     sys.Name,
+		PromptCategory: sys.Category,
+		PromptVersion:  sys.Version,
+		Options:        llm.Options{MaxTokens: 4096, Temperature: 0.2},
 	}
 	if *reasoning > 0 {
 		req.Reasoning = &llm.ReasoningConfig{BudgetTokens: *reasoning}
@@ -536,18 +547,20 @@ func triage(ctx context.Context, args []string) error {
 	}
 	svc := llm.NewService(provider, log)
 
-	p := prompt.MustLoad("change-triage")
+	p := prompt.MustLoad("structured/change-triage")
 	text, err := p.Render(map[string]any{"Diff": string(diff)})
 	if err != nil {
 		return err
 	}
 
 	result, res, err := llm.Structured[Triage](ctx, svc, llm.Request{
-		Prompt:        text,
-		Purpose:       "change-triage",
-		PromptVersion: p.Version,
-		CorrelationID: "cli:triage",
-		Options:       llm.Options{MaxTokens: 1024, Temperature: 0},
+		Prompt:         text,
+		Purpose:        "change-triage",
+		PromptName:     p.Name,
+		PromptCategory: p.Category,
+		PromptVersion:  p.Version,
+		CorrelationID:  "cli:triage",
+		Options:        llm.Options{MaxTokens: 1024, Temperature: 0},
 	}, llm.Schema{
 		Name:        "change_triage",
 		Description: "Triage a change to the platform.",
@@ -612,4 +625,136 @@ func platformInstructions() tools.Instructions {
 		agent.TaskReleaseNotes: "Write release notes from the commits since the last tag. " +
 			"Write to CHANGELOG.md only.",
 	}
+}
+
+// compose generates an artefact in a given format — and does not hand it back unless it is
+// valid.
+//
+// This is the command that dogfoods the milestone. `--format mermaid` asks Claude for a
+// diagram, and the platform refuses to return one that would render as a red error box on
+// a page somebody is reading. The validator knows about the two Mermaid bugs that actually
+// shipped in this repository, because they shipped in this repository.
+func compose(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("compose", flag.ContinueOnError)
+	template := fs.String("template", "", "a prompt from the catalogue, e.g. architecture/mermaid-diagram (required)")
+	kind := fs.String("format", "markdown", "json | yaml | markdown | mermaid | table | text")
+	out := fs.String("out", "", "write to this file instead of stdout")
+	varFlags := multiFlag{}
+	fs.Var(&varFlags, "var", "a template variable: --var Subject=\"the tool loop\" (repeatable)")
+	contextFile := fs.String("context-file", "", "a file whose contents become {{.Context}}")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: llm compose --template architecture/mermaid-diagram "+
+			"--format mermaid --var Subject=\"the tool loop\"\n\nflags:\n")
+		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nprompts:\n")
+		for _, name := range prompt.Names() {
+			fmt.Fprintf(os.Stderr, "  %s\n", name)
+		}
+	}
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+	if *template == "" {
+		fs.Usage()
+		return fmt.Errorf("%w: --template is required", errUsage)
+	}
+
+	k, err := format.Parse(*kind)
+	if err != nil {
+		return err
+	}
+	f := format.For(k)
+
+	p, err := prompt.Load(*template)
+	if err != nil {
+		return err
+	}
+
+	data := map[string]any{}
+	for k, v := range varFlags {
+		data[k] = v
+	}
+	if *contextFile != "" {
+		body, err := os.ReadFile(*contextFile)
+		if err != nil {
+			return err
+		}
+		data["Context"] = string(body)
+	}
+	if _, ok := data["Context"]; !ok {
+		data["Context"] = ""
+	}
+
+	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	provider, info, err := providers.New(ctx, log)
+	if err != nil {
+		return err
+	}
+	svc := llm.NewService(provider, log)
+
+	req := llm.Request{
+		Purpose: llm.Purpose(p.Category),
+		Options: llm.Options{MaxTokens: 4096, Temperature: 0.2},
+	}
+	// Apply stamps the prompt's name, category and version onto the request, so the log line
+	// can say which prompt produced this and a bill can be grouped by CAPABILITY.
+	if err := p.Apply(&req, data); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "--- %s · %s · %s (%s) · format: %s ---\n",
+		info.Provider, info.Model, p.Name, p.Version, f.Name())
+
+	content, res, err := svc.Compose(ctx, req, f)
+	if err != nil {
+		return err
+	}
+
+	if *out != "" {
+		if err := os.WriteFile(*out, []byte(content+"\n"), 0o644); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "wrote %s\n", *out)
+	} else {
+		fmt.Println(content)
+	}
+
+	fmt.Fprintf(os.Stderr, "--- %d in / %d out · %s VALIDATED ---\n",
+		res.Usage.PromptTokens, res.Usage.CompletionTokens, strings.ToUpper(f.Name()))
+	return nil
+}
+
+// listPrompts shows the catalogue, by capability.
+func listPrompts() error {
+	categories := []string{
+		prompt.Summarisation, prompt.Structured, prompt.Architecture,
+		prompt.Writing, prompt.Workflow,
+	}
+	for _, c := range categories {
+		prompts := prompt.InCategory(c)
+		if len(prompts) == 0 {
+			continue
+		}
+		fmt.Printf("%s\n", strings.ToUpper(c))
+		for _, p := range prompts {
+			fmt.Printf("  %-38s %s\n", p.Name, p.Version)
+		}
+		fmt.Println()
+	}
+	return nil
+}
+
+// multiFlag collects repeated --var k=v flags.
+type multiFlag map[string]string
+
+func (m multiFlag) String() string { return "" }
+
+func (m multiFlag) Set(v string) error {
+	k, val, ok := strings.Cut(v, "=")
+	if !ok {
+		return fmt.Errorf("expected key=value, got %q", v)
+	}
+	m[k] = val
+	return nil
 }

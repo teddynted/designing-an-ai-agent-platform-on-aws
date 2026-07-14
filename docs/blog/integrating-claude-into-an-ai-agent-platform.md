@@ -16,6 +16,7 @@ I had made in bold, twice.*
 
 ## Contents
 
+- [Why Claude, and why through Bedrock](#why-claude-and-why-through-bedrock)
 - [I predicted this milestone wrong](#i-predicted-this-milestone-wrong)
 - [The claim I had to withdraw](#the-claim-i-had-to-withdraw)
 - [What "the model can act" actually costs](#what-the-model-can-act-actually-costs)
@@ -25,8 +26,78 @@ I had made in bold, twice.*
 - [Structured output, and which half of it is real](#structured-output-and-which-half-of-it-is-real)
 - [The bug that would have made every tool call empty](#the-bug-that-would-have-made-every-tool-call-empty)
 - [Prompts are code](#prompts-are-code)
+- [Validate the artefact, not just the JSON](#validate-the-artefact-not-just-the-json)
+- [Cost, and scalability](#cost-and-scalability)
+- [What this design makes easy next](#what-this-design-makes-easy-next)
 - [Lessons learned](#lessons-learned)
 - [What comes next](#what-comes-next)
+
+## Why Claude, and why through Bedrock
+
+Two decisions, and they are less connected than they look.
+
+### Why Claude
+
+The platform already has a local model (Ollama, Milestone 7) and it is genuinely good at what
+it is for. A 3B model summarises a diff in three bullets perfectly well, costs nothing at the
+margin, and — the thing that actually matters — **the prompt never leaves the network**.
+
+What it is not good at is *judgement*. Ask a 3B model whether an architecture is sound and it
+produces something confident and wrong, which is strictly worse than a refusal. The work this
+platform wants a frontier model for is exactly the work where being confidently wrong is
+expensive:
+
+- **Deciding whether to act.** "Should this event trigger the publish workflow?" A wrong yes
+  publishes something.
+- **Reading untrusted input carefully.** A diff from a public repository, with a prompt
+  injection in it, being read by a model that has tools.
+- **Producing an artefact something else depends on** — YAML that must deploy, a diagram that
+  must render.
+
+Claude was chosen for three properties, in this order: **tool use that is reliable enough to
+build a loop on**, **instruction-following under adversarial input** (it is the one thing I
+tested hardest, because M9's whole security model assumes the model mostly does what the
+system prompt says), and **long context**, because a tool loop re-sends everything every turn
+and a 8k window would be exhausted by turn three.
+
+Not because it is "the best model". That is a claim with a shelf life of about four months,
+and a platform whose architecture depends on it is a platform that will need rewriting when
+it expires. Which brings us to:
+
+### Why through Bedrock, and not Anthropic's API
+
+I could have called `api.anthropic.com` directly. It would have been *slightly* less code —
+no SDK, no SigV4, a plain HTTP client of the sort this repository already has three of.
+
+I went through Bedrock, and every reason is an operational one rather than a technical one:
+
+**There is no credential.** This is the big one and it never stops being the big one. The
+direct API needs a key: stored somewhere, rotated by someone, redacted from logs, kept out of
+git, and injected into the instance. Bedrock needs **none of that** — the EC2 instance role
+resolves temporary credentials through the SDK's default chain, and a credential that does not
+exist cannot be leaked, committed, or rotated three months late. Milestone 8 already built
+that plumbing; Claude arrived through it for free.
+
+**The prompt does not leave AWS.** It still leaves the VPC, and `Capabilities.Local` is `false`
+for exactly that reason. But "it goes to a managed service in my own account's region, over
+PrivateLink if I want" is a materially different conversation with a security reviewer than
+"it goes to a third party over the public internet". For a private repository, that difference
+is sometimes the whole decision.
+
+**One bill, one quota, one set of IAM policies.** The model becomes an AWS resource, governed
+by the same `bedrock:InvokeModel` policy — scoped to named model ARNs — that governs
+everything else. Cost lands in Cost Explorer next to the EC2 spend, tagged, without a second
+invoice from a second vendor.
+
+**And the model ID becomes configuration.** Because Milestone 8 chose Bedrock's `Converse` API
+over `InvokeModel`, switching from Claude to Nova to Llama is *a different string*. Which means
+the sentence "we chose Claude" is a configuration decision with a four-month shelf life,
+sitting on an architecture with a much longer one. That is the correct place for it to sit.
+
+The cost of going through Bedrock is real and worth naming: **you are always slightly behind.**
+A new Claude model appears on Anthropic's API before it appears in Bedrock, and when it does
+appear it may need a cross-region inference profile that the bare model ID does not tell you
+about. I have decided that lag is worth not owning a secret. That is a trade, not a free lunch.
 
 ## I predicted this milestone wrong
 
@@ -412,6 +483,95 @@ determined injection can talk a model round, which is exactly why the tools give
 author a privileged action even when it has been talked round. Defence in depth means
 assuming the previous layer failed.
 
+## Validate the artefact, not just the JSON
+
+`Structured[T]` handles the case where you want a *value*. But a lot of what a platform wants
+from a frontier model is an **artefact**, and artefacts fail differently — and much more
+quietly:
+
+| The model produces | Where it actually breaks |
+| --- | --- |
+| YAML with a tab in it | **At deploy.** Hours later, in CloudFormation. |
+| An invalid Mermaid diagram | **On a rendered page.** The first person to notice is a reader. |
+| A Markdown table with one extra cell | **Never, visibly.** It renders. Slightly wrong. Forever. |
+
+In every one of those, the log line says `inference completed`, the tokens are paid for, and
+the fault surfaces in a component that did nothing wrong. So the rule is:
+
+> **A generation that produced invalid YAML is a FAILED generation.**
+
+Validation happens at the boundary, while the output is still the model's output and while
+there is still enough context to do the obvious thing — show the model its own mistake and ask
+again, once. Naming the *exact* fault is what makes that work: "invalid YAML" gets a different
+invalid answer, and "line 3 is indented with a TAB, and YAML does not permit tabs" gets a
+correct one.
+
+The Mermaid validator is my favourite thing in this milestone, because it is entirely
+self-inflicted. It knows that `call` cannot be a node ID, and that a semicolon inside a
+`sequenceDiagram` note terminates the statement — because **both of those bugs shipped in
+diagrams in this repository**, and both render as a red error box rather than failing. The
+validator is a list of my own mistakes, which is the most honest kind of validator there is.
+
+It is explicitly **not a Mermaid parser**, and it says so in its own doc comment. A validator
+that over-promises is worse than one whose limits are written down, because people stop
+checking.
+
+## Cost, and scalability
+
+The uncomfortable arithmetic, because a frontier model in a loop is the most expensive thing
+this platform does.
+
+**A tool loop is quadratic-ish, not linear.** Every turn re-sends the whole conversation. A
+three-turn exchange in this platform costs ~5,400 input tokens for what began as one question
+— closer to the *sum* of 1..3 than to 3× a single call. Nobody's mental model does this
+automatically, and the bill is where you find out.
+
+Four things bound it, and they are all boring on purpose:
+
+1. **Prompt caching.** The system prompt and tool schemas never change, so a cache point bills
+   them at a fraction on every subsequent turn. On a long loop this is most of the invoice —
+   and it is why the tool list is *sorted*, because a cached prefix must be byte-identical and
+   a Go map's iteration order would silently defeat the whole thing.
+2. **A turn bound (8) and a dollar bound.** A stuck model does not hang, **it spends** — it
+   calls the same tool with slightly different arguments, cheerfully, forever.
+3. **The right model for the job.** Haiku for summarising, Sonnet for judgement. This is a
+   `BEDROCK_MODEL_ID`, which means it is a deployment decision rather than a code change.
+4. **`estimatedCostUsd` and `promptCategory` on every log line.** So the question "what is this
+   platform spending its tokens on?" has an answer that is grouped by *capability* — the
+   difference between "the blog workflow is expensive" and "summarisation is expensive,
+   everywhere, and that is where an optimisation would pay".
+
+**Scalability is mostly not our problem, and the part that is, is the quota.** Bedrock scales
+horizontally without capacity planning, which is exactly what you are buying. What does not
+scale is the account's tokens-per-minute quota, and the platform's answer to hitting it is
+already built: `ErrThrottled` is its own error kind, retried with backoff and full jitter, and
+deliberately **not** an outage — so a "provider down" alarm does not fire every time the
+platform is merely busy. Under sustained load the honest answers are: ask AWS for more quota,
+or route the cheap work to the local model. The second one is Milestone 10.
+
+## What this design makes easy next
+
+Everything the brief excluded — Knowledge Bases, Bedrock Agents, Guardrails, RAG, vector
+stores, MCP — was excluded deliberately, and the architecture was shaped so that none of them
+is a rewrite:
+
+- **A router (M10)** implements `llm.Provider` itself and sits exactly where a single provider
+  sits today. Nothing above it changes. `Capabilities` already carries what it must route on
+  — and since this milestone, that includes what a model **can do**, not just what it costs.
+- **More Bedrock models** — Nova, Llama, Mistral — need **no new package at all**. They are
+  Converse models, so they are a change to `BEDROCK_MODEL_ID`. That is the dividend of
+  Milestone 8's choice of `Converse` over `InvokeModel`, collected a milestone later.
+- **MCP** is a `ToolRunner`. That is the entire integration: `Specs()` and `Run()`, and the
+  loop, the schema validation, the idempotency keys and the `Write`-tool retry rule all apply
+  to it unchanged — which is a genuinely nice property to get for free, and the reason
+  `ToolRunner` is an interface rather than a struct.
+- **Guardrails and Knowledge Bases** are Bedrock features and land in `internal/bedrock`,
+  behind `Capabilities`, invisible to every caller.
+- **RAG** is a retrieval step *before* the prompt is built, which is to say: it is a caller's
+  problem, and the inference plane does not need to know it happened.
+
+The test of an abstraction is not whether it is elegant. It is what the *next* thing costs.
+
 ## Lessons learned
 
 **A capability, not a provider, is what breaks your assumptions.** Milestone 8 added an
@@ -438,6 +598,16 @@ refuse, loudly, at the boundary.
 **Test the values, not the shapes.** "A tool call came back" passes against an integration
 that sends every tool empty arguments. "The tool call contained `workflow: blog-generator`"
 does not.
+
+**Validate the artefact where it is produced, not where it is consumed.** Invalid YAML fails
+at deploy; an invalid diagram fails on a page a reader is looking at. Both are hours and a
+component away from the model that produced them, and both are trivially fixable at the moment
+of generation — if anything is checking.
+
+**Unit tests prove your logic; integration tests prove your beliefs.** The mocks assert that
+a `ThrottlingException` becomes `ErrThrottled`. They cannot tell you that Bedrock still sends
+one. Those are different questions and they deserve different tiers — one that runs in
+milliseconds on an aeroplane, and one that costs money and is opt-in.
 
 ## What comes next
 

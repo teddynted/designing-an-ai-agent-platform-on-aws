@@ -353,3 +353,225 @@ That rule is not a comment. `internal/architecture_test.go` walks the import gra
 `go/build` and **fails the build** if it is ever broken — and it was checked by breaking it
 on purpose, because an architecture test that has never failed is a test nobody should
 trust.
+
+## 8. The Claude request lifecycle
+
+One request, from a caller to a validated artefact — and every gate it has to pass.
+
+```mermaid
+flowchart TB
+    caller["a caller<br/><i>a workflow step, the CLI</i>"]
+
+    subgraph prompts["internal/prompt"]
+        tmpl["a template, by capability<br/><b>summarisation/diff-summary</b><br/><i>versioned by content hash</i>"]
+    end
+
+    subgraph service["llm.Service — the same for EVERY provider"]
+        direction TB
+        valid["<b>validate</b><br/>prompt or messages, not both"]
+        capcheck["<b>capability gate</b><br/>tools? schema? reasoning?<br/><i>REFUSE if the provider cannot</i>"]
+        fit["<b>does it FIT?</b><br/>pessimistic 3 chars/token<br/><i>refuse before spending</i>"]
+        logreq["<b>log</b> — promptHash, promptCategory,<br/>promptVersion, correlationId<br/><i>never the prompt itself</i>"]
+    end
+
+    provider["llm.Provider<br/><i>the interface</i>"]
+    bed["internal/bedrock<br/>Converse · SigV4 · retry policy"]
+    claude[("Claude<br/><i>on Bedrock</i>")]
+
+    subgraph after["on the way back"]
+        direction TB
+        classify["<b>classify</b> the error into the<br/>platform's vocabulary<br/><i>no AWS type escapes</i>"]
+        fmt["<b>validate the artefact</b><br/>JSON · YAML · Mermaid · table<br/><i>invalid = a FAILED generation</i>"]
+        repair["<b>repair, once</b><br/>show the model its own mistake"]
+        logres["<b>log</b> — tokens, tok/s,<br/>estimatedCostUsd, finishReason"]
+    end
+
+    result["a VALIDATED artefact"]
+
+    caller --> tmpl --> valid --> capcheck --> fit --> logreq --> provider
+    provider --> bed --> claude
+    claude --> classify --> fmt
+    fmt -->|"invalid"| repair --> provider
+    fmt -->|"valid"| logres --> result
+
+    classDef gate fill:#fff4e6,stroke:#f59f00,stroke-width:2px
+    classDef good fill:#d3f9d8,stroke:#2f9e44
+    classDef ext fill:#f1f3f5,stroke:#868e96
+    class capcheck,fit,fmt gate
+    class result good
+    class claude ext
+```
+
+**Everything in `llm.Service` happens for every provider, identically.** That is the point of
+putting it there rather than in the provider: a router (M10) will sit in front of several,
+and if each logged in its own shape no dashboard could span them, and if each checked context
+windows differently the same prompt would be accepted by one and silently truncated by
+another.
+
+## 9. The provider abstraction
+
+The brief for this milestone lists seven providers that might come later. None of them is a
+change to a caller.
+
+```mermaid
+flowchart TB
+    subgraph callers["callers — depend on the INTERFACE, never on a vendor"]
+        cli["cmd/llm"]
+        wf["a workflow step"]
+        tools2["internal/tools"]
+    end
+
+    svc["<b>llm.Service</b><br/>validate · capability-gate · fit · retry · log · redact"]
+    iface{{"<b>llm.Provider</b><br/>Name · Capabilities · Models · Generate · Stream"}}
+    factory["<b>internal/providers</b><br/>the factory · reads LLM_PROVIDER<br/><i>the ONLY package importing two vendors</i>"]
+
+    subgraph today["today"]
+        oll["internal/ollama<br/>Local: true · cost 0<br/>Tools: <b>false</b>"]
+        bed["internal/bedrock<br/>Local: false · real cost<br/>Tools: <b>true</b> (Claude)"]
+    end
+
+    subgraph tomorrow["tomorrow — none of these is a change to a caller"]
+        nova["Amazon Nova"]:::fut
+        llama["Meta Llama"]:::fut
+        mistral["Mistral"]:::fut
+        openai["OpenAI"]:::fut
+        vertex["Google Vertex"]:::fut
+        azure["Azure OpenAI"]:::fut
+    end
+
+    router["<b>llm.Router (M10)</b><br/><i>implements llm.Provider ITSELF,<br/>and sits exactly where one sits today</i>"]:::fut
+
+    callers --> svc --> iface
+    factory -- builds --> iface
+    iface -.-> oll
+    iface -.-> bed
+    iface -.-> tomorrow
+    iface -.-> router
+
+    classDef fut fill:#f8f9fa,stroke:#adb5bd,stroke-dasharray: 5 5
+    classDef seam fill:#fff4e6,stroke:#f59f00,stroke-width:2px
+    class iface,factory seam
+```
+
+Note where **Nova, Llama and Mistral** actually land: they need **no new package at all**.
+They are Bedrock models, and Bedrock speaks `Converse` — so they are a change to
+`BEDROCK_MODEL_ID` and nothing else. That is the dividend of choosing Converse over
+`InvokeModel` back in Milestone 8: the model ID became configuration rather than a branch.
+
+OpenAI, Vertex and Azure are genuinely new providers — a new package each, implementing five
+methods. What they are **not** is a change to `llm.Service`, to `internal/tools`, or to a
+single caller.
+
+## 10. The workflow sequence, end to end
+
+The chain this milestone was asked for: an event arrives, n8n orchestrates, OpenClaw executes,
+Claude reasons, and a validated artefact completes the workflow.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant GH as GitHub
+    participant EB as EventBridge
+    participant N as n8n<br/><i>orchestration</i>
+    participant P as the platform<br/><i>workflow/agent/llm Services</i>
+    participant OC as OpenClaw<br/><i>agentic execution</i>
+    participant C as Claude<br/><i>via Bedrock</i>
+
+    GH->>EB: push / pull_request
+    EB->>N: the event (correlationId is born here)
+
+    Note over N: n8n decides WHAT happens and in WHAT ORDER.<br/>It owns the waiting, because it is durable.
+
+    N->>P: run the "pr-review" workflow
+
+    rect rgb(231, 245, 255)
+        Note over P,C: single-shot reasoning — a FUNCTION CALL, not an errand
+        P->>C: summarisation/diff-summary (the diff as DATA)
+        C-->>P: a summary
+    end
+
+    rect rgb(255, 244, 230)
+        Note over P,OC: agentic execution — an ERRAND: tools, a loop, minutes
+        P->>OC: submit(task, budget it cannot exceed)
+        Note over OC: OpenClaw calls its OWN model.<br/>The platform is NOT in that path.
+        OC-->>P: output — <b>UNTRUSTED</b>
+    end
+
+    rect rgb(211, 249, 216)
+        Note over P,C: the platform puts the agent's output THROUGH Claude
+        P->>C: structured/change-triage (the agent's output as DATA)
+        C-->>P: {"severity":"low","summary":"…"}
+        P->>P: validate: schema + Go type + T.Validate()
+    end
+
+    P-->>N: a VALIDATED structured result
+    N->>GH: comment on the pull request
+
+    Note over GH,C: the correlationId from step 2 is on every log line in between
+```
+
+**Where this diverges from the brief's chain, and why.** The brief draws
+*OpenClaw → LLM Provider Interface → Claude*. This platform does not let the agent call the
+platform's provider, and the reason is
+[Milestone 6's boundary](openclaw-diagrams.md): the agent's output is **untrusted**, and an
+agent that could call our provider interface would be an agent whose model calls, budgets and
+prompts became ours to own — which is exactly the coupling `openclaw-on-aws` exists to avoid.
+
+So the platform sits **in the middle**. OpenClaw executes and returns; the platform then puts
+that output *through* Claude as **data**, and validates the result before anything downstream
+believes it. The chain the brief wanted is delivered; the boundary Milestone 6 drew survives.
+
+## 11. Component interaction
+
+Who talks to whom, and — the part that is easy to lose — **who is allowed to talk to whom**.
+
+```mermaid
+flowchart TB
+    subgraph platform["THIS repository — the contracts"]
+        direction TB
+        wfs["<b>workflow.Service</b><br/>M5"]
+        ags["<b>agent.Service</b><br/>M6"]
+        llms["<b>llm.Service</b><br/>M7 · + the tool loop, M9"]
+        toolreg["<b>internal/tools</b><br/>M9 · what the model may DO"]
+        prompts["<b>internal/prompt</b><br/>M9 · prompts, by capability"]
+        fmts["<b>internal/format</b><br/>M9 · validate the artefact"]
+        fac["<b>internal/providers</b><br/>M8 · the factory"]
+    end
+
+    subgraph external["OTHER repositories — the deployments"]
+        n8n["n8n"]
+        oc["OpenClaw"]
+        oll["Ollama"]
+    end
+
+    aws[("Amazon Bedrock<br/>Claude")]
+
+    wfs --> n8n
+    ags --> oc
+    llms --> fac
+    fac --> oll
+    fac --> aws
+
+    toolreg -->|"implements llm.ToolRunner"| llms
+    toolreg --> wfs
+    toolreg --> ags
+    prompts --> llms
+    fmts -.->|"implements llm.Formatter"| llms
+
+    oc -.->|"its OWN model —<br/>the platform is NOT in this path"| aws
+
+    classDef core fill:#fff4e6,stroke:#f59f00,stroke-width:2px
+    classDef ext fill:#f1f3f5,stroke:#868e96
+    class wfs,ags,llms,toolreg,prompts,fmts,fac core
+    class n8n,oc,oll,aws ext
+```
+
+Every arrow into `llm.Service` from the left is an **interface it declares and something else
+implements** — `Provider`, `ToolRunner`, `Formatter`. That is not decoration: it is why
+`internal/llm` can be tested end to end, tool loop and repair loop included, without an HTTP
+server, a YAML parser, or AWS anywhere in the test binary.
+
+And it is enforced. `internal/architecture_test.go` walks the import graph with `go/build`
+and fails the build if `llm` ever learns what a workflow is, what YAML is, or which vendor it
+is talking to — each rule verified by breaking it on purpose, because an architecture test
+that has never failed is one nobody should trust.
