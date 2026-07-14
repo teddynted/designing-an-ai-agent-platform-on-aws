@@ -8,7 +8,8 @@
 [![Milestone 5](https://img.shields.io/badge/M5%20n8n%20Integration-shipped-brightgreen)](docs/blog/using-n8n-as-the-workflow-engine-for-ai-automation.md)
 [![Milestone 6](https://img.shields.io/badge/M6%20OpenClaw-shipped-brightgreen)](docs/blog/integrating-openclaw-into-an-ai-agent-platform.md)
 [![Milestone 7](https://img.shields.io/badge/M7%20Ollama-shipped-brightgreen)](docs/blog/running-local-llms-with-ollama-on-aws.md)
-[![Next milestone](https://img.shields.io/badge/next-M8%20Bedrock-lightgrey)](#milestone-8--amazon-bedrock-integration)
+[![Milestone 8](https://img.shields.io/badge/M8%20Bedrock-shipped-brightgreen)](docs/blog/adding-amazon-bedrock-to-an-ai-agent-platform.md)
+[![Next milestone](https://img.shields.io/badge/next-M9%20Claude-lightgrey)](#milestone-9--claude-integration)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -19,8 +20,9 @@
 > a [custom AMI in 2.5 seconds](infra/AMI.md) instead of 76, the platform can
 > [orchestrate work through self-hosted n8n](WORKFLOWS.md), and it can
 > [hand a task to an autonomous agent](AGENTS.md) with a budget it cannot exceed, and
-> [run its own inference on a local model](INFERENCE.md) without the prompt ever leaving
-> the network. Everything from [Milestone 8](#milestone-8--amazon-bedrock-integration) on
+> [run its own inference](INFERENCE.md) on **either** a local model — without the prompt
+> ever leaving the network — **or** Amazon Bedrock, switched by one environment variable.
+> Everything from [Milestone 9](#milestone-9--claude-integration) on
 > is still a statement of intent. See [What exists today](#what-exists-today), which is
 > kept honest.
 
@@ -43,6 +45,7 @@ on a repository, and how to keep the bill and the blast radius small.
 - [Workflow orchestration with n8n](#workflow-orchestration-with-n8n)
 - [Agent execution with OpenClaw](#agent-execution-with-openclaw)
 - [Local inference with Ollama](#local-inference-with-ollama)
+- [Managed inference with Amazon Bedrock](#managed-inference-with-amazon-bedrock)
 - [Technology Stack](#technology-stack)
 - [Repository Scope](#repository-scope)
 - [Related Repositories](#related-repositories)
@@ -114,7 +117,8 @@ Being explicit, because everything else on this page is aspirational:
 | Workflow orchestration (n8n) | ✅ **Implemented** | [Milestone 5](#milestone-5--self-hosted-n8n-integration): the **integration** — trigger, authenticate, retry, correlate. n8n itself is deployed by [`self-hosted-n8n-on-aws`](#related-repositories). See [WORKFLOWS.md](WORKFLOWS.md) |
 | Agent execution (OpenClaw) | ✅ **Implemented** | [Milestone 6](#milestone-6--openclaw-integration): the **integration** — submit, track, retrieve, cancel, with mandatory budgets and untrusted-output validation. OpenClaw is deployed by [`openclaw-on-aws`](#related-repositories). See [AGENTS.md](AGENTS.md) |
 | Inference (Ollama) + provider abstraction | ✅ **Implemented** | [Milestone 7](#milestone-7--ollama-integration): the platform runs **its own** single-shot inference on a local model, behind a provider interface. *(The **agent's** model calls are still the agent's, behind its boundary — see [the correction](INFERENCE.md#wait--milestone-6-said-the-platform-calls-no-model).)* See [INFERENCE.md](INFERENCE.md) |
-| Bedrock, Claude, hybrid routing | 📋 Planned | [Milestones 8–10](#milestone-8--amazon-bedrock-integration). The `llm.Provider` interface exists for them |
+| Managed inference (Amazon Bedrock) | ✅ **Implemented** | [Milestone 8](#milestone-8--amazon-bedrock-integration): a **second** provider behind the same interface, switched by `LLM_PROVIDER` — no caller changed. IAM auth, model-scoped least privilege, throttling as its own error kind. See [INFERENCE.md](INFERENCE.md) |
+| Claude, hybrid routing | 📋 Planned | [Milestones 9–10](#milestone-9--claude-integration). Two providers now implement `llm.Provider`, and they answer `Capabilities()` differently — which is what a router routes on |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -136,13 +140,14 @@ managed backstop are still ahead.
   plane, and a stateless inference plane, each sized and priced independently.
 - **Hybrid AI routing** — one abstraction over local models, Amazon Bedrock, and
   the Claude API, choosing a provider per request by cost, latency, and
-  capability. *(Half built: the [abstraction exists](#local-inference-with-ollama) and
-  Ollama implements it. The **choosing** is Milestone 10 — today every prompt goes to
-  the one local model.)*
+  capability. *(Most of the way there: the [abstraction exists](#local-inference-with-ollama),
+  and **both Ollama and [Bedrock](#managed-inference-with-amazon-bedrock) implement it** —
+  switched by one environment variable. The **choosing**, per request, is Milestone 10.)*
 - **Spot-first inference** — GPU capacity on EC2 Spot, with a managed backstop so
   an interruption degrades latency rather than availability. *(The Spot half is
-  [built](#cost-optimization-with-ec2-spot); the GPU and the managed backstop are not —
-  the backstop needs a hosted provider, which is Milestone 8.)*
+  [built](#cost-optimization-with-ec2-spot) and the managed backstop
+  [now exists](#managed-inference-with-amazon-bedrock); the GPU, and **failing over**
+  between them automatically, are Milestone 10.)*
 - **Self-hosted workflow orchestration** — n8n as the durable orchestrator between
   events, agents, and the outside world. *(The platform's side of this is
   [built](#workflow-orchestration-with-n8n): it can trigger, authenticate, retry and
@@ -965,10 +970,123 @@ it. It belongs behind a security group that lets nothing in — which is exactly
 
 ### Future providers
 
-Each is an implementation of the same interface, and **not a change to any caller**:
-Bedrock (M8) · Claude (M9) · **hybrid routing** (M10) — cheap-and-local for a summary,
+Each is an implementation of the same interface, and **not a change to any caller** —
+[Bedrock (M8)](#managed-inference-with-amazon-bedrock) has now proved that claim.
+Claude (M9) · **hybrid routing** (M10) — cheap-and-local for a summary,
 frontier-and-hosted for reasoning, and **local-only** for a private repository whose
 source may not leave.
+
+## Managed inference with Amazon Bedrock
+
+**Milestone 8.** A **second** provider behind the interface Milestone 7 built — so the
+platform switches between a model it hosts and a model AWS hosts **by configuration, not
+by code**:
+
+```bash
+LLM_PROVIDER=ollama    # a model on hardware you own; the prompt does not leave
+LLM_PROVIDER=bedrock   # a managed foundation model; the prompt leaves, and is billed
+```
+
+> 📄 [Adding Amazon Bedrock to an AI Agent Platform](docs/blog/adding-amazon-bedrock-to-an-ai-agent-platform.md) — the blog post ·
+> 📐 [Diagrams](docs/architecture/bedrock-diagrams.md) ·
+> 🛠️ [INFERENCE.md](INFERENCE.md) — the reference
+
+Same CLI, same logs, same retry semantics. **No caller changed.**
+
+### The abstraction held. The vocabulary did not
+
+This is the honest headline, and it is more useful than *"it worked"*.
+
+`llm.Provider` did not change by one line, and neither did `llm.Service`. Bedrock was an
+**implementation**, not a rewrite — which is exactly the claim Milestone 7 made, and it is
+now tested rather than asserted.
+
+**The error vocabulary was another matter.** Milestone 7 defined a "provider-agnostic" set
+of errors against a sample of exactly one provider — and Ollama has **no authentication**,
+**no quotas** and **no entitlements**. So it had no word for any of this:
+
+```go
+ErrUnauthorized      // the provider rejected our credentials
+ErrModelAccessDenied // the model EXISTS, and this account may not use it
+ErrThrottled         // the provider is fine; we are over our quota
+```
+
+None of those are Bedrock exotica — *every* hosted provider has all three. The
+"provider-agnostic" vocabulary was a careful description of **Ollama**, wearing an
+interface's clothes.
+
+> **You cannot design an abstraction from a sample of one.** You can only describe that
+> one. The second implementation is the first honest audit of the first, and finding this
+> at two providers cost an afternoon rather than a refactor.
+
+Note what was *not* added: no `ErrInferenceProfileRequired`, no `ErrRegionUnsupported`.
+Those are real Bedrock failures, and they map onto the existing nouns with a message that
+names the AWS-specific fix. **The vocabulary grew by what is true of hosted providers in
+general, not by what is true of Bedrock** — which is the difference between an abstraction
+and a union of its implementations.
+
+### There is no API key
+
+The entire Bedrock credential configuration:
+
+```json
+{ "credentials": "(AWS IAM — resolved by the SDK's default chain; no static key)" }
+```
+
+That is not a redaction — there is nothing behind it. The SDK's default chain resolves the
+**EC2 instance role** via IMDS, and what comes back is **temporary credentials that AWS
+rotates**. Nothing in Secrets Manager, nothing in CloudFormation, nothing in the
+environment.
+
+**A credential that does not exist cannot be leaked, committed, or rotated late.** Locally,
+`aws sso login` produces the same credentials down the same code path — there is no
+development mode that authenticates differently, because a development mode that
+authenticates differently is a production incident that has not happened yet.
+
+### The permission error that is two errors
+
+Bedrock has **two** permission gates, configured in different places by different people,
+and they throw **the same exception**:
+
+| | What it asks | Where it lives |
+| --- | --- | --- |
+| **1. IAM** | May this *role* call `InvokeModel` on this model? | Your IAM policy |
+| **2. Model access** | May this *account* use the model **at all**? | Bedrock console → *Model access* |
+
+So the platform's error names both, because AWS will not tell you which — and a faithful
+error that sends you to the wrong place costs you the afternoon you would have spent
+thinking.
+
+The IAM policy is **model-scoped and empty by default**
+([`02-iam.yaml`](infra/cloudformation/02-iam.yaml)): `BedrockModelArns` grants nothing
+until you name something. Almost every stray AWS wildcard is a security problem;
+**`bedrock:InvokeModel` on `*` is a wildcard that _bills_ you** — permission to invoke the
+most expensive model in the catalogue, as often as an attacker likes.
+
+### Throttling is not an outage
+
+> `ErrThrottled` means **the provider is fine, and you are over your quota.**
+
+Folded into `ErrUnavailable`, it would mean a *"Bedrock is down"* alarm fires every time
+the platform gets **busy** — which is precisely when you least want to be woken to look at
+a healthy service. It is retried (inference has no side effects), but it is a graph of
+**demand**, not an incident.
+
+**And the AWS SDK's own retries are disabled.** The SDK retries throttling by default; so
+does this integration. Three attempts of three is nine billed calls, an `attempts: 3` log
+line that is a lie, and two layers that hide each other. **Exactly one layer may retry —
+the one that knows what the operation costs.**
+
+### The seam, enforced by a test
+
+`internal/providers` is the **only** package permitted to import two vendors, and
+`internal/llm` may import none. That is not a convention:
+[`internal/architecture_test.go`](internal/architecture_test.go) walks the import graph
+with `go/build` and **fails the build** if it stops being true.
+
+**The default is `ollama`** — a platform that ships somebody's source code to a hosted
+service because nobody set an environment variable has made that choice on their behalf,
+and made it badly.
 
 ## Technology Stack
 
@@ -1261,13 +1379,29 @@ flowchart TB
 
 #### Milestone 8 — Amazon Bedrock Integration
 
-- **Objective** — Add a managed inference backstop that needs no capacity
-  planning.
-- **Primary focus** — Failover from self-hosted capacity; the economics of
-  managed versus self-hosted inference.
-- **Related technologies** — Amazon Bedrock.
-- **Expected outcome** — Spot interruption degrades latency and cost, never
-  availability.
+✅ **Shipped.**
+[Blog post](docs/blog/adding-amazon-bedrock-to-an-ai-agent-platform.md) ·
+[INFERENCE.md](INFERENCE.md) ·
+[Diagrams](docs/architecture/bedrock-diagrams.md) ·
+[Overview](#managed-inference-with-amazon-bedrock)
+
+- **Objective** — Add managed inference behind the **same** provider interface, so the
+  platform switches between a model it hosts and a model AWS hosts by **configuration,
+  not code**.
+- **Primary focus** — The **second implementation as an audit of the first**: the
+  interface held unchanged, and the error *vocabulary* did not — Milestone 7 designed it
+  against a provider with no auth, no quotas and no entitlements, so it had no word for
+  `ErrUnauthorized`, `ErrModelAccessDenied` or `ErrThrottled`. Also: **IAM instead of an
+  API key** (a credential that does not exist cannot leak); **throttling as its own error
+  kind**, because a "provider down" alarm must not fire whenever the platform is busy;
+  and **disabling the SDK's retries**, because two retry layers multiply rather than add.
+- **Related technologies** — Amazon Bedrock (`Converse` / `ConverseStream`), AWS SDK for
+  Go v2, IAM, SigV4.
+- **Outcome** — `LLM_PROVIDER=bedrock` and nothing else changes: same CLI, same logs, same
+  retry semantics, no caller touched. The IAM policy is model-scoped and grants **nothing**
+  by default. No unit test touches AWS.
+  *Automatic **failover** between providers — the Spot GPU vanishes and Bedrock picks up the
+  request — needs a router, and that is Milestone 10.*
 
 #### Milestone 9 — Claude Integration
 
@@ -1423,6 +1557,7 @@ built, or out of order, as a set of independent AWS design studies.
 | 5 | [Using n8n as the Workflow Engine for AI Automation](docs/blog/using-n8n-as-the-workflow-engine-for-ai-automation.md) | M5 | ✅ Published |
 | 6 | [Integrating OpenClaw into an AI Agent Platform](docs/blog/integrating-openclaw-into-an-ai-agent-platform.md) | M6 | ✅ Published |
 | 7 | [Running Local LLMs with Ollama on AWS](docs/blog/running-local-llms-with-ollama-on-aws.md) | M7 | ✅ Published |
+| 8 | [Adding Amazon Bedrock to an AI Agent Platform](docs/blog/adding-amazon-bedrock-to-an-ai-agent-platform.md) | M8 | ✅ Published |
 | 8+ | One per milestone, as each is built | M8+ | 📋 Planned |
 
 ## Future Enhancements

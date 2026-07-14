@@ -1,11 +1,14 @@
 AWSTemplateFormatVersion: "2010-09-09"
 
 Description: >-
-  AI Agent Platform — IAM foundation (Milestone 2).
+  AI Agent Platform — IAM foundation (Milestones 2 and 8).
   Least-privilege roles for the platform's EC2 compute and its placeholder
   Lambda, plus the instance profile that binds the EC2 role to the instance.
   No wildcard resource ARNs: every permission is scoped to a specific resource
   or to a resource-name prefix owned by this project and environment.
+  Milestone 8 adds OPT-IN access to Amazon Bedrock, scoped to named models. It is
+  off by default: an inference API that any instance can call is a bill that any
+  compromised instance can run up.
 
 Parameters:
   ProjectName:
@@ -19,6 +22,48 @@ Parameters:
     Default: dev
     AllowedValues: [dev, staging, prod]
     Description: Deployment environment. Must match the other stacks.
+
+  BedrockModelArns:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >-
+      Full ARNs of the Bedrock models the instance may invoke. ARNs rather than model
+      IDs, because CloudFormation cannot map a list of IDs onto a list of ARNs — and a
+      template that quietly granted only the FIRST model in the list would be worse than
+      one that asks you to be explicit.
+
+      Foundation model:
+        arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0
+      Cross-region inference profile (needed for newer models on-demand):
+        arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0
+
+      A profile ARN is a DIFFERENT resource from the model it fronts, and invoking through
+      a profile needs BOTH — grant only the model and the call fails with a validation
+      error that never mentions permissions.
+
+      EMPTY BY DEFAULT, which grants no Bedrock access at all. That is deliberate: Bedrock
+      turns permission into money, and an instance that may invoke any model is an instance
+      whose compromise is measured in dollars per minute.
+
+      Note this grants permission to INVOKE. It does not grant the ACCOUNT access to the
+      model — that is a one-off entitlement under Bedrock > Model access in the console,
+      and it is the most common reason a correctly-permissioned call still fails.
+
+  BedrockRegions:
+    Type: CommaDelimitedList
+    Default: "us-east-1"
+    Description: >-
+      Regions in which Bedrock may be called at all, enforced with the aws:RequestedRegion
+      condition key. Model availability, pricing and quotas are all regional, and a
+      cross-region inference profile invokes the model in whichever region of its group has
+      capacity — so a profile spanning us-east-1, us-east-2 and us-west-2 needs all three
+      listed here, or it will fail in exactly the region nobody thought of.
+
+Conditions:
+  # No models named means no Bedrock policy at all — not an empty one. An empty policy
+  # document is a resource that exists and grants nothing, which is harder to reason
+  # about than a resource that is simply absent.
+  UseBedrock: !Not [!Equals [!Join ["", !Ref BedrockModelArns], ""]]
 
 Resources:
   # -------------------------------------------------------------------------
@@ -89,6 +134,60 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-instance-role"
+
+  # -------------------------------------------------------------------------
+  # Bedrock access (Milestone 8) — opt-in, and scoped to named models.
+  #
+  # Attached as a separate managed policy rather than an inline statement on the role,
+  # so that "does this instance have Bedrock?" is answerable by looking at what is
+  # attached, rather than by reading a policy document and hunting for a Condition.
+  # -------------------------------------------------------------------------
+  BedrockInvokePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: UseBedrock
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-${Environment}-bedrock-invoke"
+      Description: Invoke named Bedrock foundation models. Scoped by model and region.
+      Roles:
+        - !Ref InstanceRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # The two actions that cost money, scoped to the models named in the
+          # parameter — never to "*". A wildcard here is a licence to invoke the most
+          # expensive model in the catalogue, which is precisely what an attacker who
+          # lands on this instance would do.
+          #
+          # Both foundation-model and inference-profile ARNs are granted, because a
+          # newer model is only reachable on-demand THROUGH a cross-region inference
+          # profile, and the profile is a distinct resource with a distinct ARN. Grant
+          # only the model and the call fails with a validation error that does not
+          # mention permissions at all.
+          - Sid: InvokeNamedModels
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+            # The named models, and only the named models. A wildcard here would be a
+            # licence to invoke the most expensive model in the catalogue — which is
+            # exactly what anyone who lands on this instance would do with it.
+            Resource: !Ref BedrockModelArns
+            Condition:
+              # Belt and braces: even with a model ARN, the call may only be made in a
+              # region we expect. It costs one condition key and it bounds the blast
+              # radius of a copied credential to the regions this platform actually uses.
+              StringEquals:
+                aws:RequestedRegion: !Ref BedrockRegions
+
+          # Listing models is read-only, costs nothing, and does not support
+          # resource-level permissions — so "*" is the only expressible form. It is what
+          # `llm models` and the start-up model check call.
+          - Sid: ListModels
+            Effect: Allow
+            Action:
+              - bedrock:ListFoundationModels
+              - bedrock:GetFoundationModel
+            Resource: "*"
 
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile

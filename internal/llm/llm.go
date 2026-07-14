@@ -121,6 +121,46 @@ var (
 	// the caller. It is deliberately not retryable: the caller has half an answer,
 	// and a retry would hand them a second beginning.
 	ErrStreamBroken = errors.New("stream broke after output had begun")
+
+	// --- added in Milestone 8, by the second provider ------------------------
+	//
+	// These three did not exist until Bedrock arrived, and their absence is worth
+	// dwelling on rather than quietly fixing.
+	//
+	// Milestone 7 designed this vocabulary against exactly one implementation —
+	// Ollama — which has no authentication (it is a tool meant for a laptop) and
+	// does not throttle (it is one process on one box; it just goes slower). So the
+	// abstraction had no word for "your credentials are wrong" and no word for "you
+	// are asking too often", because nothing had ever needed one.
+	//
+	// That is the ordinary way abstractions are wrong: not by being badly designed,
+	// but by being designed from a sample of one. A second implementation is the
+	// only thing that reveals it, which is a large part of why the second one is
+	// worth doing before you have three call sites depending on the first.
+
+	// ErrUnauthorized means the provider rejected our credentials or refused the
+	// call. Retrying cannot help; a human must fix an IAM policy or a key.
+	ErrUnauthorized = errors.New("llm provider rejected our credentials")
+
+	// ErrModelAccessDenied means the model EXISTS and this account is not allowed to
+	// use it.
+	//
+	// It is distinct from ErrUnauthorized on purpose, because the fix is different
+	// and so is the person who applies it: ErrUnauthorized is an IAM problem for an
+	// engineer, and this is an entitlement someone has to request — in Bedrock, a
+	// per-model access grant in the console, which is the single most common reason
+	// a correct-looking Bedrock call fails on a fresh account.
+	ErrModelAccessDenied = errors.New("the account is not granted access to this model")
+
+	// ErrThrottled means the provider is rate-limiting us.
+	//
+	// It is distinct from ErrUnavailable because it means something completely
+	// different operationally. Unavailable is "the provider is broken"; throttled is
+	// "the provider is fine, and you are over your quota" — which is a capacity and
+	// cost signal, not an outage, and it is the failure a hosted provider actually
+	// hands you under load. Collapsing the two would make an alert on "the model
+	// provider is down" fire every time the platform got busy.
+	ErrThrottled = errors.New("llm provider is throttling us")
 )
 
 // Role is who is speaking in a chat-shaped request.
