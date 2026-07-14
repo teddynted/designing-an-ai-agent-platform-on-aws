@@ -166,18 +166,32 @@ is a pipeline concern, consuming is an infrastructure concern, and **the AMI ID 
 the interface between them.** Keeping that seam clean is why `03-compute` neither
 knows nor cares how its image was made.
 
-**And why n8n is not on this map at all.** It is neither a stack nor a script here —
-it is *another repository's deployment*. Milestone 5 added the integration
-([`internal/workflow`](../../internal/workflow), [`internal/n8n`](../../internal/n8n))
-and **zero AWS resources**. If an n8n stack ever appears in `infra/cloudformation`,
-the boundary this repository committed to has failed:
+**And why n8n, OpenClaw and Ollama are not on this map at all.** None of them is a
+stack or a script here — each is *another repository's deployment*. Milestones 5, 6 and
+7 added integrations and, between them, **zero AWS resources**:
+
+| Milestone | The integration (here) | The deployment (not here) |
+| --- | --- | --- |
+| M5 | [`internal/workflow`](../../internal/workflow) + [`internal/n8n`](../../internal/n8n) | `self-hosted-n8n-on-aws` |
+| M6 | [`internal/agent`](../../internal/agent) + [`internal/openclaw`](../../internal/openclaw) | `openclaw-on-aws` |
+| M7 | [`internal/llm`](../../internal/llm) + [`internal/ollama`](../../internal/ollama) | `ollama-on-aws` |
+
+If an n8n, OpenClaw or Ollama stack ever appears in `infra/cloudformation`, the boundary
+this repository committed to has failed:
 
 > *If a change affects more than one component, it belongs in the platform. If it
 > affects exactly one, it belongs in that component's repository.*
 
-An n8n version bump affects n8n. The shape of the JSON we send it affects everything
-that sends it — so the payload, the auth header, the retry policy and the idempotency
-key live here, and the servers do not.
+An n8n version bump affects n8n; a GPU driver on the Ollama host affects that host. But
+the shape of the JSON we send them, the auth, the retry policy, the idempotency key and
+the provider abstraction affect **everything that calls them** — so those live here, and
+the servers do not.
+
+Each integration is the same shape on purpose — a `Service` that validates, correlates,
+times and logs, over an interface (`Engine`, `Runtime`, `Provider`) with one
+implementation. None of the three core packages imports its own client:
+`workflow`↛`n8n`, `agent`↛`openclaw`, `llm`↛`ollama`. That is the mechanical test that
+the seams are real rather than decorative, and it is checked, not asserted.
 
 ## 3. The life of one instance
 

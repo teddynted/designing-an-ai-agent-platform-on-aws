@@ -136,9 +136,13 @@ managed backstop are still ahead.
   plane, and a stateless inference plane, each sized and priced independently.
 - **Hybrid AI routing** — one abstraction over local models, Amazon Bedrock, and
   the Claude API, choosing a provider per request by cost, latency, and
-  capability.
+  capability. *(Half built: the [abstraction exists](#local-inference-with-ollama) and
+  Ollama implements it. The **choosing** is Milestone 10 — today every prompt goes to
+  the one local model.)*
 - **Spot-first inference** — GPU capacity on EC2 Spot, with a managed backstop so
-  an interruption degrades latency rather than availability.
+  an interruption degrades latency rather than availability. *(The Spot half is
+  [built](#cost-optimization-with-ec2-spot); the GPU and the managed backstop are not —
+  the backstop needs a hosted provider, which is Milestone 8.)*
 - **Self-hosted workflow orchestration** — n8n as the durable orchestrator between
   events, agents, and the outside world. *(The platform's side of this is
   [built](#workflow-orchestration-with-n8n): it can trigger, authenticate, retry and
