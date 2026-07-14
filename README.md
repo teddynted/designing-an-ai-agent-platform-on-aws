@@ -7,7 +7,8 @@
 [![Milestone 4](https://img.shields.io/badge/M4%20Custom%20AMIs-shipped-brightgreen)](docs/blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md)
 [![Milestone 5](https://img.shields.io/badge/M5%20n8n%20Integration-shipped-brightgreen)](docs/blog/using-n8n-as-the-workflow-engine-for-ai-automation.md)
 [![Milestone 6](https://img.shields.io/badge/M6%20OpenClaw-shipped-brightgreen)](docs/blog/integrating-openclaw-into-an-ai-agent-platform.md)
-[![Next milestone](https://img.shields.io/badge/next-M7%20Ollama-lightgrey)](#milestone-7--ollama-integration)
+[![Milestone 7](https://img.shields.io/badge/M7%20Ollama-shipped-brightgreen)](docs/blog/running-local-llms-with-ollama-on-aws.md)
+[![Next milestone](https://img.shields.io/badge/next-M8%20Bedrock-lightgrey)](#milestone-8--amazon-bedrock-integration)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -17,10 +18,11 @@
 > [EC2 Spot with interruption handling](infra/SPOT.md), and that compute boots from
 > a [custom AMI in 2.5 seconds](infra/AMI.md) instead of 76, the platform can
 > [orchestrate work through self-hosted n8n](WORKFLOWS.md), and it can
-> [hand a task to an autonomous agent](AGENTS.md) with a budget it cannot exceed.
-> Everything from [Milestone 7](#milestone-7--ollama-integration) on is still a
-> statement of intent — **no model is called by this platform yet**. See
-> [What exists today](#what-exists-today), which is kept honest.
+> [hand a task to an autonomous agent](AGENTS.md) with a budget it cannot exceed, and
+> [run its own inference on a local model](INFERENCE.md) without the prompt ever leaving
+> the network. Everything from [Milestone 8](#milestone-8--amazon-bedrock-integration) on
+> is still a statement of intent. See [What exists today](#what-exists-today), which is
+> kept honest.
 
 An open design study and reference implementation for running **autonomous AI
 agents on AWS**: how to host them, how to feed them models, how to let them act
@@ -40,6 +42,7 @@ on a repository, and how to keep the bill and the blast radius small.
 - [Startup optimization with custom AMIs](#startup-optimization-with-custom-amis)
 - [Workflow orchestration with n8n](#workflow-orchestration-with-n8n)
 - [Agent execution with OpenClaw](#agent-execution-with-openclaw)
+- [Local inference with Ollama](#local-inference-with-ollama)
 - [Technology Stack](#technology-stack)
 - [Repository Scope](#repository-scope)
 - [Related Repositories](#related-repositories)
@@ -110,7 +113,8 @@ Being explicit, because everything else on this page is aspirational:
 | Custom AMIs + fast startup | ✅ **Implemented** | [Milestone 4](#milestone-4--custom-amis): a versioned image pipeline. Boot measured at **2.5s**, down from **76s**. See [infra/AMI.md](infra/AMI.md) |
 | Workflow orchestration (n8n) | ✅ **Implemented** | [Milestone 5](#milestone-5--self-hosted-n8n-integration): the **integration** — trigger, authenticate, retry, correlate. n8n itself is deployed by [`self-hosted-n8n-on-aws`](#related-repositories). See [WORKFLOWS.md](WORKFLOWS.md) |
 | Agent execution (OpenClaw) | ✅ **Implemented** | [Milestone 6](#milestone-6--openclaw-integration): the **integration** — submit, track, retrieve, cancel, with mandatory budgets and untrusted-output validation. OpenClaw is deployed by [`openclaw-on-aws`](#related-repositories). See [AGENTS.md](AGENTS.md) |
-| Inference (Ollama, Bedrock, Claude) | 📋 Planned | **This platform calls no model.** The agent does — [Milestone 7](#milestone-7--ollama-integration) onwards |
+| Inference (Ollama) + provider abstraction | ✅ **Implemented** | [Milestone 7](#milestone-7--ollama-integration): the platform runs **its own** single-shot inference on a local model, behind a provider interface. *(The **agent's** model calls are still the agent's, behind its boundary — see [the correction](INFERENCE.md#wait--milestone-6-said-the-platform-calls-no-model).)* See [INFERENCE.md](INFERENCE.md) |
+| Bedrock, Claude, hybrid routing | 📋 Planned | [Milestones 8–10](#milestone-8--amazon-bedrock-integration). The `llm.Provider` interface exists for them |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -231,7 +235,7 @@ and most of it (n8n, OpenClaw, Ollama, Bedrock routing) is still unbuilt.
 The diagram above is the **target**. This is the **present** — the same AWS service
 view, drawn for what really exists in the account today:
 
-![The platform as built after Milestone 6: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sit two component repositories the platform integrates with but does not deploy — self-hosted n8n for orchestration and OpenClaw for agent execution, the latter enforcing a budget and rejecting any output containing a credential; the platform itself calls no AI model.](docs/architecture/platform-as-built.svg)
+![The platform as built after Milestone 7: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sit three component repositories the platform integrates with but does not deploy — self-hosted n8n for orchestration, OpenClaw for agentic execution (which calls its own model and whose output is untrusted), and Ollama for local inference, where the prompt never leaves the network; hosted inference and hybrid routing are not built yet.](docs/architecture/platform-as-built.svg)
 
 > 🗺️ **[The Platform As Built](docs/architecture/current-architecture.md)** — the
 > living diagram set (runtime topology, stack map, the life of one instance),
@@ -822,6 +826,146 @@ Ollama (the agent calls the model, not the platform).
 - **A dead-letter path** for submissions that exhaust their retries.
 - **Cost budgets per repository**, not just per execution.
 
+## Local inference with Ollama
+
+**Milestone 7.** The platform runs **its own** inference on a self-hosted **Ollama** —
+behind a provider interface that Bedrock (M8), Claude (M9) and a router (M10) will
+implement next.
+
+> 📄 [Running Local LLMs with Ollama on AWS](docs/blog/running-local-llms-with-ollama-on-aws.md) — the blog post ·
+> 📐 [Diagrams](docs/architecture/ollama-diagrams.md) ·
+> 🛠️ [INFERENCE.md](INFERENCE.md) — the reference
+
+> ⚠️ **This repository does not deploy Ollama.** The instance, the GPU and the models on
+> disk belong to [`ollama-on-aws`](#related-repositories). This repository owns *the
+> provider abstraction that calls it*.
+
+### Wait — Milestone 6 said the platform calls no model
+
+It did, in bold. That statement was true and it needs sharpening, not quietly widening:
+
+- **The agent's inference is still the agent's.** OpenClaw calls its own model, behind
+  its own boundary. Nothing here is in that path.
+- **But not everything worth doing with a model needs an agent.** *"Summarise this
+  diff"* is one prompt and one completion — no shell, no tools, no loop. Routing it
+  through an agent means paying for an **errand** when what you wanted was a **function
+  call**.
+
+So there are two consumers of inference: the **agent plane** (M6), which owns its model
+calls, and the **inference plane** (M7, this), which is the one the architecture has had
+on paper since Milestone 1. The [repository scope](#repository-scope) has always listed
+*"provider abstraction over model backends"* under what this repository owns.
+
+### Why local: the prompt does not leave
+
+The usual arguments are cost and latency. **Neither is the real one.**
+
+This platform's prompts are full of *somebody's source code* — diffs, whole files, commit
+messages, and on a bad day something nobody meant to commit. A hosted provider means all
+of that crosses the internet to a third party. TLS protects it in transit and changes
+nothing about the fact that **you have sent them your source**.
+
+For a public repo, fine. For a private one it is the entire question — which is why
+`Local` is a first-class field a future router can route on:
+
+```go
+type Capabilities struct {
+    Local                   bool  // does the prompt LEAVE? the field that matters
+    MaxContextTokens        int
+    CostPer1MInputTokensUSD float64 // 0 for local: the cost is the instance
+}
+```
+
+And a small model is **not** a small version of a big one: a 3B model is genuinely good
+at *"summarise this diff in three bullets"* and genuinely bad at *"is this architecture
+sound?"* — where it produces something confident and wrong, which is worse than a
+refusal. That asymmetry is the whole reason Milestone 10 exists.
+
+### The timeout that actually works
+
+**A total timeout is nearly useless for inference.** Set it long enough for a legitimate
+slow generation on a CPU (minutes) and it will wait just as patiently for a model that
+hung instantly.
+
+> The useful question is not *"has this finished?"* but **"has it produced a single token
+> in the last thirty seconds?"**
+
+A slow model keeps answering yes. A wedged one does not — and **only a stream can answer
+that at all**, which is why streaming is the default and `OLLAMA_IDLE_TIMEOUT` matters
+more than `OLLAMA_TIMEOUT`. The idle timer resets on every token, so a slow-but-steady
+model is never killed.
+
+### A retry is safe here — and that is new
+
+| Retrying… | costs |
+| --- | --- |
+| **M5** an n8n trigger | the workflow runs **twice** |
+| **M6** an agent submission | a **second pull request**, and a second bill |
+| **M7** an inference | **compute.** That is all. |
+
+Generation has no side effects — nothing to deduplicate, no idempotency key. After two
+milestones of paranoia, the right answer here is *just retry it*.
+
+**Except once a stream has emitted a token.** The sink is a side effect: the caller may
+already have written those tokens somewhere. A retry would hand them a **second
+beginning**, glued onto the first. That is `ErrStreamBroken`, and it is terminal.
+
+### The failure that looks like success
+
+> **A model asked to read more than its context window does not refuse.** It silently
+> drops the beginning of the prompt and answers confidently from what is left.
+
+A plausible, fluent, **wrong** summary — of the wrong part of the diff. No error. Nothing
+in any log. So the platform refuses to send it:
+
+```
+error: prompt exceeds the model's context window: ~13334 tokens of prompt into a
+       4096-token window. The model would silently drop the beginning and answer
+       from the rest — summarise or chunk the input instead
+```
+
+The estimate is deliberately pessimistic (code tokenises far worse than prose). Which
+makes `OLLAMA_CONTEXT_TOKENS` the one setting where **being wrong is invisible**.
+
+### Try it
+
+```bash
+export OLLAMA_BASE_URL=http://localhost:11434
+export OLLAMA_MODEL=llama3.2
+
+go run ./cmd/llm models      # what is on the box
+go run ./cmd/llm check       # is the configured model actually there?
+go run ./cmd/llm generate --prompt "Summarise EC2 Spot in three bullets."
+```
+
+It streams, and it tells you when something is wrong in a way you can act on:
+
+```
+--- 7 tokens in 1.078s · 3.5 tok/s · load 300ms · finish: stop ---
+note: 3.5 tok/s is CPU-speed. If this box has a GPU, the model is not using it.
+```
+
+`tokensPerSecond` is the most diagnostic number in the integration — **below ten, you are
+on a CPU**, and everything is about to take minutes instead of seconds.
+
+### Security
+
+**Prompts are never logged.** They are repository content. The logs carry a **size and a
+hash** instead, so two lines can be recognised as the same prompt without either
+containing it. Completions likewise — they are derived from prompts and can echo them.
+
+**Ollama has no authentication of its own.** It is a tool designed for a laptop, so an
+Ollama reachable from a network is an open inference endpoint for anyone who can reach
+it. It belongs behind a security group that lets nothing in — which is exactly what
+[the network stack](infra/README.md) already provides.
+
+### Future providers
+
+Each is an implementation of the same interface, and **not a change to any caller**:
+Bedrock (M8) · Claude (M9) · **hybrid routing** (M10) — cheap-and-local for a summary,
+frontier-and-hosted for reasoning, and **local-only** for a private repository whose
+source may not leave.
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -903,15 +1047,16 @@ affects exactly one, it belongs in that component's repository.
 ## Related Repositories
 
 The integration milestones establish the contracts. **One is now wired:** the
-platform can trigger n8n workflows ([Milestone 5](#workflow-orchestration-with-n8n))
-and hand tasks to OpenClaw agents ([Milestone 6](#agent-execution-with-openclaw)) —
-though this repository *deploys* neither of them, and never will.
+platform can trigger n8n workflows ([M5](#workflow-orchestration-with-n8n)), hand tasks
+to OpenClaw agents ([M6](#agent-execution-with-openclaw)), and run inference on a local
+Ollama model ([M7](#local-inference-with-ollama)) — though this repository *deploys* none
+of them, and never will.
 
 | Repository | Purpose | Integrated at | Status |
 | --- | --- | --- | --- |
 | `self-hosted-n8n-on-aws` | Deploys the n8n workflow engine on AWS | [M5](#milestone-5--self-hosted-n8n-integration) | ✅ **Wired** — see [WORKFLOWS.md](WORKFLOWS.md) |
 | `openclaw-on-aws` | Deploys the OpenClaw agent runtime on AWS | [M6](#milestone-6--openclaw-integration) | ✅ **Wired** — see [AGENTS.md](AGENTS.md) |
-| `ollama-on-aws` | Deploys Ollama inference nodes on AWS | [M7](#milestone-7--ollama-integration) | 📋 Planned |
+| `ollama-on-aws` | Deploys Ollama inference nodes on AWS | [M7](#milestone-7--ollama-integration) | ✅ **Wired** — see [INFERENCE.md](INFERENCE.md) |
 | `ai-github-repository-blog-generator` | An agent that reads a repository and drafts a technical post | [M13](#milestone-13--ai-github-repository-blog-generator-integration) | 📋 Planned |
 
 ## Roadmap
@@ -1088,12 +1233,27 @@ flowchart TB
 
 #### Milestone 7 — Ollama Integration
 
-- **Objective** — Serve open-weight models from the platform's own GPU capacity.
-- **Primary focus** — Model loading, GPU utilisation, and surviving Spot
-  interruption mid-request.
-- **Related technologies** — Ollama, EC2 GPU instances, EC2 Spot.
-- **Expected outcome** — Local inference at a known cost per token, and a known
-  failure mode.
+✅ **Shipped.**
+[Blog post](docs/blog/running-local-llms-with-ollama-on-aws.md) ·
+[INFERENCE.md](INFERENCE.md) ·
+[Diagrams](docs/architecture/ollama-diagrams.md) ·
+[Overview](#local-inference-with-ollama)
+
+- **Objective** — Serve open-weight models from the platform's own capacity, behind a
+  provider abstraction.
+- **Primary focus** — The **integration**, not the deployment: a provider interface
+  built *before* the second provider, because the swap is the roadmap (M8–M10);
+  **streaming**, because a stall is only detectable in a stream and a total timeout
+  cannot tell a slow model from a hung one; and the **silent-truncation** trap — a
+  prompt larger than the context window is not refused, it is quietly halved, and the
+  model answers confidently from what is left.
+- **Related technologies** — Go, Ollama, NDJSON streaming, exponential backoff.
+- **Outcome** — The platform runs its own single-shot inference on a local model, with
+  the prompt never leaving the network, prompts never reaching the logs, and a
+  `tokensPerSecond` figure that says from one log line whether the model is on a GPU.
+  *Model loading, GPU utilisation and surviving a Spot interruption mid-request are the
+  Ollama host's concerns and live in `ollama-on-aws`; this milestone defines the contract
+  with it.*
 
 #### Milestone 8 — Amazon Bedrock Integration
 
@@ -1258,7 +1418,8 @@ built, or out of order, as a set of independent AWS design studies.
 | 4 | [Optimizing EC2 Spot Instance Startup with Custom AMIs](docs/blog/optimizing-ec2-spot-instance-startup-with-custom-amis.md) | M4 | ✅ Published |
 | 5 | [Using n8n as the Workflow Engine for AI Automation](docs/blog/using-n8n-as-the-workflow-engine-for-ai-automation.md) | M5 | ✅ Published |
 | 6 | [Integrating OpenClaw into an AI Agent Platform](docs/blog/integrating-openclaw-into-an-ai-agent-platform.md) | M6 | ✅ Published |
-| 7+ | One per milestone, as each is built | M7+ | 📋 Planned |
+| 7 | [Running Local LLMs with Ollama on AWS](docs/blog/running-local-llms-with-ollama-on-aws.md) | M7 | ✅ Published |
+| 8+ | One per milestone, as each is built | M8+ | 📋 Planned |
 
 ## Future Enhancements
 

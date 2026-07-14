@@ -42,6 +42,12 @@ This post is about wiring one in without letting it near anything it can break.
 
 ---
 
+> **A note from [Milestone 7](running-local-llms-with-ollama-on-aws.md).** This post says,
+> below, that *the platform never calls the model*. That is still true of the **agent's**
+> inference — it calls its own model, behind its own boundary. What Milestone 7 added is an
+> inference plane for single-shot work (*"summarise this diff"*) that needs no agent at all.
+> The post is kept as written; the correction is made in the open, in Milestone 7.
+
 ## Orchestration is not execution
 
 It is tempting to see n8n and an agent framework as two flavours of the same thing —

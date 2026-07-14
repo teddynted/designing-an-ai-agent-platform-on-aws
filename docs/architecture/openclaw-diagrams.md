@@ -18,6 +18,13 @@
 Five diagrams, sharing the colour key of the earlier sets (compute = orange,
 storage = green, external = grey, failure = red).
 
+> **Sharpened by [Milestone 7](../blog/running-local-llms-with-ollama-on-aws.md).** The
+> claim below — *the platform never calls the model* — remains true of the **agent's**
+> inference, which is still the agent's own. But the platform now has an inference plane
+> for single-shot work that needs no agent. This snapshot is kept as written; the
+> distinction is explained in
+> [INFERENCE.md](../../INFERENCE.md#wait--milestone-6-said-the-platform-calls-no-model).
+
 ## 1. Who does what
 
 The whole milestone in one picture: **orchestration is not execution.**

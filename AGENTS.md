@@ -122,9 +122,17 @@ sequenceDiagram
     N8N->>GH: open a pull request
 ```
 
-Note where the model appears: **the platform never calls it.** The agent does. The
-platform's job stops at "run this task, within these limits, and show me what came
-back".
+Note where the model appears: **the agent calls it, not the platform.** The platform's
+job stops at "run this task, within these limits, and show me what came back", and how
+the agent thinks — which model, how many turns, what tools — is behind the boundary.
+
+> **Milestone 7 sharpened this, and the distinction is worth keeping straight.** The
+> *agent's* inference is still the agent's: nothing in the platform is in that path, and
+> swapping the agent's model remains a change in `openclaw-on-aws` this repository does
+> not notice. But the platform now has **inference of its own** for single-shot work —
+> *"summarise this diff"* is one prompt and one completion, and routing it through an
+> agent would mean paying for an errand when what you wanted was a function call. See
+> [INFERENCE.md](INFERENCE.md#wait--milestone-6-said-the-platform-calls-no-model).
 
 ## The contract
 
