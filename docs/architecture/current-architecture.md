@@ -21,8 +21,18 @@ it, and they are kept that way on purpose, as the record of a decision:
 
 ## 1. Runtime architecture
 
-What is running in AWS right now. Note how little of it is an "AI platform" yet —
-this is a foundation with no workload on it, and saying so plainly is the point.
+The AWS service view — the same hand-authored, version-controlled SVG approach as
+the [Milestone 1](aws-architecture.svg) and [Milestone 2](infrastructure-overview.svg)
+diagrams, with the same nesting (Cloud → Region → VPC → subnet → security group) and
+the same colour key.
+
+Note how little of it is an "AI platform" yet. This is a foundation with no workload
+on it, and the legend says so out loud rather than leaving you to infer it.
+
+![The platform as built after Milestone 4: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager, there is no inbound access, and no AI workload is deployed.](platform-as-built.svg)
+
+The same thing as a flow view — useful for seeing the two independent paths out of
+an interruption (the instance saves its own work; the account merely watches):
 
 ```mermaid
 flowchart TB
