@@ -35,6 +35,7 @@ it, and they are kept that way on purpose, as the record of a decision:
 | [claude-diagrams.md](claude-diagrams.md) | **M9** — a model that can act: tool use, structured output, and the retry rule it broke. |
 | [router-diagrams.md](router-diagrams.md) | **M10** — hybrid routing: the router as a provider, the constraint gate, fallback, and the three retries it refuses. |
 | [loop-diagrams.md](loop-diagrams.md) | **M11** — loop engineering: the agent lifecycle, the reducer, state transitions, retry, reflection, and recovery. |
+| [webhook-diagrams.md](webhook-diagrams.md) | **M12** — GitHub webhooks: the entry point, the verify/filter sequence, event routing, the lifecycle, and the retry contract. |
 | **this file** | **Everything, as it exists today.** |
 
 ## 1. Runtime architecture

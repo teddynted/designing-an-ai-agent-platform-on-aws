@@ -12,7 +12,8 @@
 [![Milestone 9](https://img.shields.io/badge/M9%20Claude-shipped-brightgreen)](docs/blog/integrating-claude-into-an-ai-agent-platform.md)
 [![Milestone 10](https://img.shields.io/badge/M10%20Hybrid%20Routing-shipped-brightgreen)](docs/blog/building-hybrid-ai-workflows-with-ollama-and-amazon-bedrock.md)
 [![Milestone 11](https://img.shields.io/badge/M11%20Loop%20Engineering-shipped-brightgreen)](docs/blog/building-autonomous-ai-agents-with-loop-engineering.md)
-[![Next milestone](https://img.shields.io/badge/next-M12%20Webhook%20Automation-lightgrey)](#milestone-12--github-webhook-automation)
+[![Milestone 12](https://img.shields.io/badge/M12%20GitHub%20Webhooks-shipped-brightgreen)](docs/blog/automating-ai-workflows-with-github-webhooks.md)
+[![Next milestone](https://img.shields.io/badge/next-M13%20Blog%20Generator-lightgrey)](#milestone-13--ai-github-repository-blog-generator-integration)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -60,6 +61,7 @@ on a repository, and how to keep the bill and the blast radius small.
 - [Claude, and a model that can act](#claude-and-a-model-that-can-act)
 - [Hybrid routing between local and managed models](#hybrid-routing-between-local-and-managed-models)
 - [Loop engineering: autonomous agents that know when to stop](#loop-engineering-autonomous-agents-that-know-when-to-stop)
+- [GitHub webhooks: the event-driven front door](#github-webhooks-the-event-driven-front-door)
 - [Technology Stack](#technology-stack)
 - [Repository Scope](#repository-scope)
 - [Related Repositories](#related-repositories)
@@ -135,6 +137,7 @@ Being explicit, because everything else on this page is aspirational:
 | Claude: reasoning, structured output, **tool use** | ✅ **Implemented** | [Milestone 9](#milestone-9--claude-integration): the model can be held to a **schema**, and can **call the platform's own tools** — trigger a workflow, hand work to an agent — inside a bounded loop. It is why "a retry is safe here" [had to be withdrawn](INFERENCE.md#a-retry-was-safe-here--milestone-9-withdrew-that). See [INFERENCE.md](INFERENCE.md) |
 | Hybrid routing | ✅ **Implemented** | [Milestone 10](#milestone-10--hybrid-ai-routing): a router that **is** an `llm.Provider`, choosing Ollama or Bedrock **per request** by purpose and capability, with health-aware fallback, a `RequireLocal` constraint the prompt cannot escape, and three retries it structurally refuses (a spoken stream, a committed effect, a live conversation). No caller changed. See [ROUTING.md](ROUTING.md) |
 | Loop engineering (autonomous agents) | ✅ **Implemented** | [Milestone 11](#milestone-11--loop-engineering): an explicit **loop controller** — a pure reducer — that drives a goal through plan → execute → evaluate → reflect → decide, with retries, reflection, always-enforced stopping conditions, and serialisable state for recovery. Reasoning delegates to the inference plane, execution to OpenClaw; the loop imports neither. See [LOOP.md](LOOP.md) |
+| GitHub webhook automation | ✅ **Implemented** | [Milestone 12](#milestone-12--github-webhook-automation): a Lambda behind a Function URL that **verifies** the HMAC signature (constant-time, over the raw body, before parsing), **filters** the event, and **publishes** a curated event to **EventBridge** — never calling n8n or a model directly, so GitHub's ten-second webhook can't be timed out into a double execution. Least-privilege IAM, the secret in Secrets Manager. See [WEBHOOKS.md](WEBHOOKS.md) |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -711,8 +714,11 @@ embeddings · video storyboards · a weekly digest on a cron.
 
 ### Future improvements
 
-- **The webhook handler** that receives the GitHub event and calls the Service —
-  Milestone 12. `cmd/workflow` is the reference caller it will copy.
+- **The webhook handler** that receives the GitHub event — **built in
+  [Milestone 12](#milestone-12--github-webhook-automation)**, and it does *not* call this
+  Service directly. It verifies and publishes the event to **EventBridge**, and n8n consumes the
+  bus and drives the workflow — the decoupled shape the milestone required (a webhook must never
+  block on the work). See [WEBHOOKS.md](WEBHOOKS.md).
 - **A response path.** Workflows are fire-and-forget today. When one needs to report
   back ("the post is drafted, here is the PR"), it should publish to the platform's
   **own event bus** — which has been sitting there since Milestone 2.
@@ -1446,6 +1452,76 @@ and tests (which blocks, and must not be put in a Lambda), and **n8n** in produc
 calls `Decide`, submits the agent execution, lets a durable wait node poll it, and calls
 `Advance` — across a run that may last hours. Same reducer, both drivers.
 
+## GitHub webhooks: the event-driven front door
+
+**Milestone 12.** The platform reacts to what happens in a repository. GitHub calls a Lambda; the
+Lambda verifies it is really GitHub, filters the event, and publishes a curated event onto the
+platform's EventBridge bus. Everything downstream reads that bus on its own schedule.
+
+> 📄 [Automating AI Workflows with GitHub Webhooks](docs/blog/automating-ai-workflows-with-github-webhooks.md) — the blog post ·
+> 📐 [Diagrams](docs/architecture/webhook-diagrams.md) ·
+> 🛠️ [WEBHOOKS.md](WEBHOOKS.md) — the reference
+
+```
+GitHub → Lambda (verify · filter) → EventBridge → n8n → OpenClaw → (Claude / Ollama)
+```
+
+### A webhook is an event, not a remote procedure call
+
+The tempting shape — GitHub calls the Lambda, the Lambda calls n8n, n8n runs the agent, the Lambda
+returns when it's all done — is wrong in a way that only shows up in production. GitHub gives a
+webhook **~10 seconds** and retries the ones that time out; an agent run takes **minutes to hours**.
+So the straight-line webhook times out, GitHub retries, and the agent runs **twice** — two pull
+requests from one push. So the Lambda does exactly four things — **verify, parse, filter, publish**
+— and returns. It never calls n8n, never starts an agent, never reaches a model. Whatever reacts to
+the event reacts on its own schedule, not GitHub's clock.
+
+### Public, with a signature — the right auth for GitHub
+
+The endpoint is a Lambda **Function URL** with `AuthType: NONE`, which looks like a mistake and is
+not: GitHub cannot authenticate with AWS IAM, so the auth is the one it *can* do — an **HMAC-SHA256
+signature** over the body, with a shared secret. "No AWS auth" is not "no auth"; the auth is in the
+body. Three things the verification gets right, because each is a classic way to get it wrong:
+
+- **Constant-time compare** (`hmac.Equal`) — a `==` that returns early leaks, through timing, how
+  much of a forged signature is correct.
+- **Verify over the raw bytes, before parsing** — the signature is over bytes, so a re-encoded body
+  would reject every real delivery, and parsing an unverified body decodes attacker input.
+- **Fail closed** — no secret, no signature, or a bad one: refused, and nothing downstream sees it.
+
+The secret lives in **Secrets Manager**, fetched once at cold start — never a Lambda env var, which
+is readable by anyone with `lambda:GetFunctionConfiguration`.
+
+### A curated event, not the raw payload
+
+The Lambda publishes a small `GitHubEvent` (event, repo, branch, sha, sender, delivery id,
+correlation id), not GitHub's tens-of-kilobytes payload. That one decision is **decoupling**
+(consumers never parse GitHub's schema, so a GitHub change is absorbed in the parser), **redaction**
+(commit messages and author emails are never extracted, so never forwarded or logged), and **size**
+(EventBridge caps an entry at 256 KB) — all at once.
+
+### EventBridge earns its hop
+
+It would be simpler to call n8n directly today, with one consumer. The bus is what makes *tomorrow*
+cheap: a second consumer — an audit log, a metrics aggregator, a dead-letter queue, replay — is a
+new rule on the same bus, and the Lambda never changes. The producer publishes once; who listens is
+a bus concern.
+
+### The status codes are an API, and only one retries
+
+`202` published · `200` ignored (a filter) or a ping · `401` bad/missing signature · `400`
+malformed · `500` publish failed. **Only the publish failure returns `500`**, because a `5xx` is the
+only thing that makes GitHub redeliver — and redelivery is right only there (the event is wanted and
+wasn't stored; the delivery id is stable, so downstream idempotency makes it safe). A `5xx` for a
+bad signature would make GitHub retry something that fails identically forever.
+
+### One correlation id, all the way down
+
+Every delivery gets `<event>:<deliveryId>` — `push:a1b2c3…` — stable across redeliveries, threading
+webhook → EventBridge → n8n → agent → inference. The agent derives its idempotency key from it, so a
+redelivered webhook produces **one** agent run, not two. It is the same id [AGENTS.md](AGENTS.md) has
+used since Milestone 6, now with a real origin.
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -1462,7 +1538,7 @@ Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
 | Frontier inference | Claude API | [M9](#milestone-9--claude-integration) |
 | Hybrid provider routing | The provider abstraction (Ollama + Bedrock) | [M10](#milestone-10--hybrid-ai-routing) |
 | Autonomous agent loop | The loop controller (a pure reducer) | [M11](#milestone-11--loop-engineering) |
-| Automation | GitHub webhooks and Actions | [M12](#milestone-12--github-webhook-automation) |
+| Event ingress | GitHub webhooks · AWS Lambda · Amazon EventBridge | [M12](#milestone-12--github-webhook-automation) |
 | Observability | Amazon CloudWatch | [M15](#milestone-15--monitoring--observability) |
 | Release tooling | Go (standard library only) | ✅ implemented |
 
@@ -1828,12 +1904,20 @@ flowchart TB
 
 #### Milestone 12 — GitHub Webhook Automation
 
-- **Objective** — Let repository events drive the platform.
-- **Primary focus** — Webhook ingress, signature verification, idempotency, and
-  replay.
-- **Related technologies** — GitHub webhooks, the control plane.
-- **Expected outcome** — An issue or a pull request can start an agent, exactly
-  once.
+- **Status** — ✅ **Shipped.** Code in [`infra/lambda/internal/webhook`](infra/lambda/internal/webhook)
+  and [`infra/cloudformation/09-webhook.yaml`](infra/cloudformation/09-webhook.yaml); reference in
+  [WEBHOOKS.md](WEBHOOKS.md); the walkthrough is the blog post,
+  [Automating AI Workflows with GitHub Webhooks](docs/blog/automating-ai-workflows-with-github-webhooks.md).
+- **Objective** — Let repository events drive the platform, event-driven rather than polled.
+- **Primary focus** — A Lambda behind a Function URL that **verifies** the HMAC signature (constant
+  time, over the raw body, before parsing), **filters** the event, and **publishes** a curated event
+  to EventBridge — and does nothing else, because a webhook that blocked on an agent run would time
+  out and be retried into a double execution.
+- **Related technologies** — GitHub webhooks, AWS Lambda, Amazon EventBridge, Secrets Manager, n8n.
+- **Outcome** — An authentic push lands on the platform bus in milliseconds; a forged one is
+  refused; a fork or an archived repo is ignored; and one delivery id threads the whole chain so a
+  redelivery produces one agent run, not two. *The webhook publishes an event and returns — n8n,
+  OpenClaw and the models are downstream consumers of the bus, on their own schedule.*
 
 #### Milestone 13 — AI GitHub Repository Blog Generator Integration
 
