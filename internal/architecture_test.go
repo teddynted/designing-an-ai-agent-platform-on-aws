@@ -341,6 +341,49 @@ func TestTheRouterIsAProvider(t *testing.T) {
 	var _ llm.Provider = (*router.Router)(nil)
 }
 
+// TestTheLoopKnowsNeitherAModelNorARuntime is Milestone 11's seam.
+//
+// The loop controller orchestrates two planes it must not become welded to: it REASONS
+// (plan, evaluate, reflect, summarise), which is the inference plane's job (internal/llm),
+// and it EXECUTES tasks, which is the agent runtime's job (internal/agent). The obvious
+// implementation reaches straight for both — call llm.Structured to get a plan, call
+// agent.Service to run a task — and the moment it does, "the loop is independent of the
+// provider and the runtime" stops being true. A loop welded to internal/llm cannot be tested
+// without a model; one welded to internal/agent drags OpenClaw's HTTP client into every unit
+// test of a stopping condition.
+//
+// So internal/loop declares its stages as interfaces (loop.Planner, loop.Executor, …) and
+// imports NEITHER llm nor agent. internal/loop/adapter — a leaf that nothing but a main
+// imports — implements those interfaces against the real planes. This test is what keeps the
+// arrow pointing that way: the reward is that the whole reducer, every stopping condition, and
+// the retry machinery are tested with struct literals and no I/O, and that swapping the model
+// or the runtime is an adapter change the loop never notices.
+func TestTheLoopKnowsNeitherAModelNorARuntime(t *testing.T) {
+	deps := transitiveImports(t, module+"loop")
+
+	for _, forbidden := range []string{"llm", "agent", "ollama", "bedrock", "openclaw", "router", "providers", "tools", "prompt"} {
+		if deps[module+forbidden] {
+			t.Errorf("internal/loop imports internal/%s.\n\n"+
+				"The loop controller must not know how reasoning is done or how a task is executed.\n"+
+				"It declares its stages as interfaces (Planner, Executor, Evaluator, Reflector,\n"+
+				"Summariser) and internal/loop/adapter implements them against internal/llm and\n"+
+				"internal/agent. The arrow points inward — the same rule as Provider, ToolRunner and\n"+
+				"Formatter — and it is what lets the whole reducer be tested with no model and no\n"+
+				"agent anywhere near it.", forbidden)
+		}
+	}
+
+	// The other half: the adapter really does wire the loop to BOTH planes, or the loop would
+	// be an abstraction with no concrete behind it.
+	adapterDeps := transitiveImports(t, module+"loop/adapter")
+	for _, required := range []string{"loop", "llm", "agent"} {
+		if !adapterDeps[module+required] {
+			t.Errorf("internal/loop/adapter does not import internal/%s — it is supposed to implement "+
+				"the loop's interfaces against the platform's real reasoning and execution planes", required)
+		}
+	}
+}
+
 // TestTheInferencePlaneDoesNotKnowWhatYAMLIs guards the last seam Milestone 9 added.
 //
 // Service.Compose validates a model's artefact before returning it — so it would be entirely
