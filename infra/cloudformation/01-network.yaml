@@ -1,11 +1,14 @@
 AWSTemplateFormatVersion: "2010-09-09"
 
 Description: >-
-  AI Agent Platform — Network foundation (Milestone 2).
+  AI Agent Platform — Network foundation (Milestone 2; egress hardening and the
+  S3 gateway endpoint added in Milestone 14).
   A dedicated VPC with a single public subnet, an internet gateway, a public
   route table, and a default-deny security group for the platform's disposable
   compute. No inbound access is permitted; instances are reached through AWS
-  Systems Manager Session Manager, not SSH.
+  Systems Manager Session Manager, not SSH. Egress is an allow-list (HTTPS, HTTP
+  for OS mirrors, DNS) rather than open, and an S3 gateway endpoint keeps bucket
+  traffic on the AWS backbone.
 
 # ---------------------------------------------------------------------------
 # Parameters — nothing about the environment is hard-coded.
@@ -101,23 +104,72 @@ Resources:
       RouteTableId: !Ref PublicRouteTable
 
   # Default-deny for inbound. No ingress rules are declared, so nothing on the
-  # internet can reach the instance. Egress is open because the instance must
-  # reach out to bootstrap, pull models, and push to Git; egress is tightened
-  # to explicit allow-lists in the security milestone.
+  # internet can reach the instance. Management is via SSM Session Manager, which
+  # is outbound-only — the instance dials AWS, nothing dials the instance.
+  #
+  # Egress is an allow-list, not "all" (Milestone 14). A box that runs untrusted,
+  # attacker-influenced content should be able to reach exactly what it needs and
+  # nothing else: an agent that cannot open an arbitrary outbound socket cannot be
+  # turned into one that exfiltrates over it. Three protocols cover every
+  # legitimate need — HTTPS for AWS APIs, Git and model endpoints; HTTP for the OS
+  # package mirrors that still start on port 80; and DNS. (Traffic to the
+  # link-local IMDS and Amazon Time Sync addresses is handled by the hypervisor
+  # and is not subject to these rules, so NTP and metadata still work.)
   InstanceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: >-
         Platform compute security group. No inbound access; management is via
-        SSM Session Manager. Egress open for bootstrap and outbound API calls.
+        SSM Session Manager. Egress limited to HTTPS, HTTP (OS mirrors) and DNS.
       VpcId: !Ref Vpc
       SecurityGroupEgress:
-        - IpProtocol: "-1"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
           CidrIp: 0.0.0.0/0
-          Description: Allow all outbound traffic.
+          Description: HTTPS — AWS APIs (SSM, CloudWatch, S3, Bedrock), Git, model endpoints, package mirrors.
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP — OS package mirrors that redirect through port 80 before upgrading to TLS.
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: DNS (UDP).
+        - IpProtocol: tcp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: DNS (TCP, for large responses).
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-instance-sg"
+
+  # An S3 gateway endpoint keeps the instance's S3 traffic — its artifacts, and
+  # anything the OS pulls from S3-backed mirrors — on the AWS backbone instead of
+  # out through the internet gateway. It is FREE, unlike interface endpoints, so
+  # there is no reason not to have it; the route table gets an S3 prefix-list
+  # route automatically.
+  #
+  # The endpoint policy is deliberately left at full access. The real control on
+  # what the instance can do to S3 is its INSTANCE ROLE (02-iam), which is already
+  # scoped to this project's one bucket — a second, tighter policy here would risk
+  # blocking the anonymous, AWS-owned package-repo buckets the OS reads through
+  # this same endpoint, for no gain the instance role does not already provide.
+  # Interface endpoints (SSM, CloudWatch Logs, EC2 messages) would let the
+  # instance run with NO internet egress at all, but each costs ~$7/month; they
+  # are documented in SECURITY.md as a production hardening rather than deployed
+  # by default.
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PublicRouteTable
 
 # ---------------------------------------------------------------------------
 # Outputs — exported for the compute stack to import. Export names follow the

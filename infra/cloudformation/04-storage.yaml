@@ -26,6 +26,21 @@ Parameters:
     MinValue: 1
     Description: Days to retain non-current object versions before expiring them.
 
+  ArtifactKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional customer-managed KMS key ARN for the artifact bucket (SSE-KMS).
+      Empty keeps SSE-S3 (AES256), which is free per request and the right default
+      for generated artifacts that are not themselves secrets. Supply a key to
+      upgrade to SSE-KMS — but note the instance role (02-iam) must then also be
+      granted kms:GenerateDataKey/Decrypt on that key, or writes will fail. The
+      audit trail (11-security) uses SSE-KMS unconditionally, because there the
+      key IS the control; here it is a documented option.
+
+Conditions:
+  UseKms: !Not [!Equals [!Ref ArtifactKmsKeyArn, ""]]
+
 Resources:
   ArtifactBucket:
     Type: AWS::S3::Bucket
@@ -37,12 +52,16 @@ Resources:
       # Account ID and region make the globally-unique bucket name deterministic,
       # which is what lets the IAM stack scope to it by convention.
       BucketName: !Sub "${ProjectName}-${Environment}-artifacts-${AWS::AccountId}-${AWS::Region}"
-      # Encryption at rest with S3-managed keys (no per-request KMS cost). Bucket
-      # keys are enabled in case a KMS key is adopted later.
+      # Encryption at rest. SSE-S3 (AES256) by default — no per-request KMS cost,
+      # and the right choice for generated artifacts that are not secrets in
+      # themselves. When ArtifactKmsKeyArn is supplied it becomes SSE-KMS with
+      # that customer-managed key. Bucket keys are enabled either way, which cuts
+      # KMS request cost sharply when SSE-KMS is in use.
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
+              SSEAlgorithm: !If [UseKms, "aws:kms", "AES256"]
+              KMSMasterKeyID: !If [UseKms, !Ref ArtifactKmsKeyArn, !Ref "AWS::NoValue"]
             BucketKeyEnabled: true
       # Block every avenue of public access.
       PublicAccessBlockConfiguration:
