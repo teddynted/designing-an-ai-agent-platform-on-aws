@@ -55,6 +55,8 @@ MON_TAGS    := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Mi
 SEC_TAGS    := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=14
 # Cost guardrails is Milestone 15.
 COST_TAGS   := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=15
+# Horizontal scaling foundation is Milestone 16.
+SCALE_TAGS  := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=16
 
 # Alarm notification email for the monitoring stack (10-monitoring). Empty deploys
 # the SNS topic with no subscription; set it to receive alarm emails (AWS sends a
@@ -103,6 +105,7 @@ STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observabilit
 .PHONY: monitoring deploy-monitoring delete-monitoring
 .PHONY: security deploy-security delete-security
 .PHONY: cost deploy-cost delete-cost
+.PHONY: scalability deploy-scalability delete-scalability
 .PHONY: ami ami-list ami-prune deploy-ami drain-sync check-drain-sync startup-benchmark
 .PHONY: help lint validate deploy delete outputs bootstrap install-hooks import-storage
 
@@ -209,7 +212,7 @@ import-storage: ## Fix the storage stack alone (adopts an orphaned artifact buck
 # `make deploy`), but a stack you deployed is a stack you want the outputs of.
 # Undeployed ones simply print "(not deployed)".
 outputs: ## Print the outputs of every deployed stack
-	@for s in $(STACKS) 07-scheduler 08-spot 09-webhook 10-monitoring 11-security 12-cost; do \
+	@for s in $(STACKS) 07-scheduler 08-spot 09-webhook 10-monitoring 11-security 12-cost 13-scalability; do \
 		echo "== $(PROJECT)-$(ENV)-$$s =="; \
 		aws cloudformation describe-stacks --region $(REGION) \
 			--stack-name $(PROJECT)-$(ENV)-$$s \
@@ -486,6 +489,43 @@ deploy-cost: ## Deploy cost guardrails (COST_EMAIL=you@example.com BUDGET_LIMIT=
 delete-cost: ## Delete the cost guardrails stack
 	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-12-cost
 	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-12-cost
+
+# --- Horizontal scaling foundation (Milestone 16) ---------------------------
+#
+# A work queue (SQS) + dead-letter queue between the event bus and the workers,
+# an EventBridge rule that load-levels long-running agent-task events into it,
+# and the queue-depth/age/DLQ alarms that are the scaling signal. Pure
+# CloudFormation — no Go to build. It imports the event bus from 05-events, so
+# that stack must exist first. The scaling alarms notify the monitoring stack's
+# alarm topic when it is deployed — resolved below exactly as deploy-monitoring
+# resolves the instance — and are simply silent-but-visible when it is not.
+
+# The monitoring alarm topic, resolved from the monitoring stack's export. Empty
+# is fine: the scaling alarms are then created without a notification action.
+define alarm_topic
+$(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-$(ENV)-10-monitoring \
+	--region $(REGION) --query "Stacks[0].Outputs[?OutputKey=='AlarmTopicArn'].OutputValue" \
+	--output text 2>/dev/null | grep -v None)
+endef
+
+scalability: deploy-scalability ## Deploy the horizontal scaling foundation (work queue, DLQ, scaling alarms)
+
+deploy-scalability: ## Deploy scalability (imports the bus from 05-events; notifies the monitoring topic if 10-monitoring is deployed)
+	@topic="$(strip $(call alarm_topic))"; \
+	[ -n "$$topic" ] && echo "scaling alarms will notify $$topic" || echo "no monitoring topic found — scaling alarms will be visible but silent"; \
+	aws cloudformation deploy \
+		--stack-name $(PROJECT)-$(ENV)-13-scalability \
+		--template-file $(CFN_DIR)/13-scalability.yaml \
+		--region $(REGION) --capabilities $(CAPS) \
+		--parameter-overrides $(PARAMS) \
+			$(if $(strip $(call alarm_topic)),AlarmTopicArn=$(strip $(call alarm_topic))) \
+		--tags $(SCALE_TAGS)
+	@echo "scalability deployed. The work queue buffers long-running agent tasks;"
+	@echo "  backlog/age/DLQ alarms are the signal a future worker fleet scales on."
+
+delete-scalability: ## Delete the horizontal scaling foundation stack
+	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-13-scalability
+	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-13-scalability
 
 # Rehearse an interruption without waiting for AWS to take the instance away.
 #
