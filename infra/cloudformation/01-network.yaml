@@ -118,9 +118,15 @@ Resources:
   InstanceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
+      # NOTE: GroupDescription is immutable — changing it REPLACES the security
+      # group, which mints a new GroupId and breaks the InstanceSecurityGroupId
+      # export that 03-compute imports (CloudFormation refuses to change an in-use
+      # export). It is deliberately left at its original Milestone 2 wording; the
+      # egress rules below are mutable and update in place. The accurate summary of
+      # the egress posture lives in the resource comment above, not here.
       GroupDescription: >-
         Platform compute security group. No inbound access; management is via
-        SSM Session Manager. Egress limited to HTTPS, HTTP (OS mirrors) and DNS.
+        SSM Session Manager. Egress open for bootstrap and outbound API calls.
       VpcId: !Ref Vpc
       SecurityGroupEgress:
         - IpProtocol: tcp
