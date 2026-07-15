@@ -13,7 +13,8 @@
 [![Milestone 10](https://img.shields.io/badge/M10%20Hybrid%20Routing-shipped-brightgreen)](docs/blog/building-hybrid-ai-workflows-with-ollama-and-amazon-bedrock.md)
 [![Milestone 11](https://img.shields.io/badge/M11%20Loop%20Engineering-shipped-brightgreen)](docs/blog/building-autonomous-ai-agents-with-loop-engineering.md)
 [![Milestone 12](https://img.shields.io/badge/M12%20GitHub%20Webhooks-shipped-brightgreen)](docs/blog/automating-ai-workflows-with-github-webhooks.md)
-[![Next milestone](https://img.shields.io/badge/next-M13%20Blog%20Generator-lightgrey)](#milestone-13--ai-github-repository-blog-generator-integration)
+[![Milestone 13](https://img.shields.io/badge/M13%20Observability-shipped-brightgreen)](docs/blog/monitoring-an-ai-agent-platform-with-cloudwatch.md)
+[![Next milestone](https://img.shields.io/badge/next-M14%20Security-lightgrey)](#milestone-14--security)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -34,8 +35,12 @@
 > the network. On top of all that it can now pursue a **goal autonomously** — an
 > [explicit, bounded, recoverable agent loop](LOOP.md) that plans, executes, evaluates,
 > reflects, retries and stops safely, with the stopping conditions enforced in code rather
-> than hoped for in a prompt. Everything from
-> [Milestone 12](#milestone-12--github-webhook-automation) on is still a statement of intent. See [What exists today](#what-exists-today), which is
+> than hoped for in a prompt. It has an [event-driven front door](WEBHOOKS.md) — a webhook that
+> verifies, filters and publishes to EventBridge without ever blocking on the work — and it is
+> now [observable through CloudWatch](OBSERVABILITY.md): one logging standard, EMF metrics,
+> dashboards, alarms and health probes, so the agent milestones that follow land already
+> visible. Everything from
+> [Milestone 14](#milestone-14--security) on is still a statement of intent. See [What exists today](#what-exists-today), which is
 > kept honest.
 
 An open design study and reference implementation for running **autonomous AI
@@ -62,6 +67,7 @@ on a repository, and how to keep the bill and the blast radius small.
 - [Hybrid routing between local and managed models](#hybrid-routing-between-local-and-managed-models)
 - [Loop engineering: autonomous agents that know when to stop](#loop-engineering-autonomous-agents-that-know-when-to-stop)
 - [GitHub webhooks: the event-driven front door](#github-webhooks-the-event-driven-front-door)
+- [Monitoring and observability with CloudWatch](#monitoring-and-observability-with-cloudwatch)
 - [Technology Stack](#technology-stack)
 - [Repository Scope](#repository-scope)
 - [Related Repositories](#related-repositories)
@@ -138,6 +144,7 @@ Being explicit, because everything else on this page is aspirational:
 | Hybrid routing | ✅ **Implemented** | [Milestone 10](#milestone-10--hybrid-ai-routing): a router that **is** an `llm.Provider`, choosing Ollama or Bedrock **per request** by purpose and capability, with health-aware fallback, a `RequireLocal` constraint the prompt cannot escape, and three retries it structurally refuses (a spoken stream, a committed effect, a live conversation). No caller changed. See [ROUTING.md](ROUTING.md) |
 | Loop engineering (autonomous agents) | ✅ **Implemented** | [Milestone 11](#milestone-11--loop-engineering): an explicit **loop controller** — a pure reducer — that drives a goal through plan → execute → evaluate → reflect → decide, with retries, reflection, always-enforced stopping conditions, and serialisable state for recovery. Reasoning delegates to the inference plane, execution to OpenClaw; the loop imports neither. See [LOOP.md](LOOP.md) |
 | GitHub webhook automation | ✅ **Implemented** | [Milestone 12](#milestone-12--github-webhook-automation): a Lambda behind a Function URL that **verifies** the HMAC signature (constant-time, over the raw body, before parsing), **filters** the event, and **publishes** a curated event to **EventBridge** — never calling n8n or a model directly, so GitHub's ten-second webhook can't be timed out into a double execution. Least-privilege IAM, the secret in Secrets Manager. See [WEBHOOKS.md](WEBHOOKS.md) |
+| Monitoring & observability | ✅ **Implemented** | [Milestone 13](#monitoring-and-observability-with-cloudwatch): one shared observability standard — structured logging with a **correlation ID that spans services**, secrets and repository content **redacted by the handler**, **EMF** metrics that cost nothing the logs did not, three CloudWatch **dashboards**, actionable **alarms** on an SNS path, liveness/readiness **health probes**, and **X-Ray** tracing that is honest about where it stops. A leaf library ([`internal/observability`](internal/observability)) anything can import, a CFN stack ([`10-monitoring.yaml`](infra/cloudformation/10-monitoring.yaml)), and the CloudWatch agent now shipping memory and disk. See [OBSERVABILITY.md](OBSERVABILITY.md) |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -431,12 +438,14 @@ Deliberately **not** built in this milestone, and each is its own piece of work:
   `capacity-optimized` allocation strategy is what turns "the instance was
   interrupted" into "a replacement is already running". The compute stack already
   provisions through a **launch template** specifically so this needs no
-  re-architecture. *(Milestone 19.)*
+  re-architecture. *(Milestone 16.)*
 - **A baked AMI** to shrink the cold start an interruption costs. *(Milestone 4.)*
 - **Checkpointing** in the workloads themselves, so an interrupted job resumes
   rather than restarts.
 - **Alarms on the interruption rate**, not just metrics — and a dashboard.
-  *(Milestone 15.)*
+  *(Built in [Milestone 13](#monitoring-and-observability-with-cloudwatch) — the
+  Spot metrics now feed dashboards and alarms; the interruption-rate alarm itself is
+  a few lines on a metric that already exists.)*
 - **A managed fallback** so interactive inference can survive an interruption
   by failing over to Bedrock. *(Built in [Milestone 10](ROUTING.md) — the router fails
   over when a provider is down.)*
@@ -580,7 +589,7 @@ Deliberately **not** built in this milestone:
   rebuild-and-roll with the previous AMI as the rollback is the right shape.
 - **Auto Scaling with a mixed-instances policy.** A fast-booting image is what makes
   an ASG *work* — the difference between replacing an interrupted instance in 76
-  seconds and in 3. *(Milestone 19.)*
+  seconds and in 3. *(Milestone 16.)*
 - **A minimal image.** Every package is attack surface and snapshot cost. A serving
   image and a build image probably should not be the same image.
 - **Cross-region copies**, if the platform ever runs in more than one region.
@@ -1522,6 +1531,141 @@ webhook → EventBridge → n8n → agent → inference. The agent derives its i
 redelivered webhook produces **one** agent run, not two. It is the same id [AGENTS.md](AGENTS.md) has
 used since Milestone 6, now with a real origin.
 
+## Monitoring and observability with CloudWatch
+
+**Milestone 13.** The platform is made observable through Amazon CloudWatch: one
+shared standard for logs, metrics, dashboards, alarms, health, and tracing — built
+as a leaf library anything can depend on, and a CloudFormation stack that turns it
+into something an operator looks at.
+
+> 📄 [Monitoring an AI Agent Platform with CloudWatch](docs/blog/monitoring-an-ai-agent-platform-with-cloudwatch.md) — the blog post ·
+> 📐 [Observability diagrams](docs/architecture/observability-diagrams.md) ·
+> 🛠️ [OBSERVABILITY.md](OBSERVABILITY.md) — the reference
+
+### The problem was too many logging styles, not too few
+
+Every integration already logged. Six packages logging "roughly the same shape" is
+not observability — it is five near-misses from a dashboard that cannot span them,
+because one writes `correlationId`, another `correlation_id`, and a third drops the
+field on the error path. So [`internal/observability`](internal/observability) is not
+a new logger. It is the **one agreement** — the field names, the metric format, the
+redaction rule, the health contract — written once, in a leaf that imports nothing of
+ours (and [a test](internal/architecture_test.go) fails the build if that changes).
+It returns a plain `*slog.Logger`, so adopting it is one line per binary, not a
+rewrite.
+
+### One line, two products
+
+The idea the milestone rests on: a structured log line and a metric are the same
+bytes seen two ways. The platform emits **one** line; CloudWatch reads it as a
+searchable log and — via a metric filter, or a CloudWatch **Embedded Metric Format**
+envelope — as a graphable, alarmable metric. EMF is the trick that makes an
+application metric cost nothing the log did not: it is a log line, extracted under the
+logging permission the process already holds, with no `PutMetricData` call and no new
+IAM.
+
+### Monitoring architecture
+
+CloudWatch collects logs and metrics from every component; alarms fan out through SNS
+to operators.
+
+```mermaid
+flowchart TB
+    subgraph sources["Sources"]
+        lambda["AWS Lambda"]
+        ec2["EC2 + CloudWatch agent"]
+        oc["OpenClaw"]
+        n8nsrc["n8n"]
+        app["Platform services"]
+    end
+
+    subgraph cw["Amazon CloudWatch"]
+        logs["Logs"]
+        metrics["Metrics<br/>AWS/EC2 · AWS/Lambda · CWAgent · aiap/app"]
+        dash["Dashboards"]
+        alarms["Alarms"]
+        xray["X-Ray"]
+    end
+
+    sns["SNS"]
+    ops(["Operators"])
+
+    lambda --> logs
+    lambda --> xray
+    ec2 --> logs
+    ec2 --> metrics
+    oc --> logs
+    n8nsrc --> logs
+    app --> logs
+    logs -->|"filters + EMF"| metrics
+    metrics --> dash
+    metrics --> alarms
+    logs --> dash
+    alarms --> sns --> ops
+    dash --> ops
+    xray --> ops
+
+    classDef aws fill:#FF9900,stroke:#232F3E,color:#232F3E
+    classDef store fill:#3F8624,stroke:#243B0B,color:#FFFFFF
+    class lambda,ec2,app aws
+    class logs,metrics,dash store
+```
+
+### Log flow and metrics flow
+
+Application → Logs → Dashboards → Alarms → Operators; and Infrastructure → Metrics →
+Dashboards → Alarms. The metric filter is the seam that lets a *log* raise an
+*alarm*.
+
+```mermaid
+flowchart LR
+    app["Application"] --> logs["CloudWatch Logs"]
+    logs --> filters["Metric filters"]
+    filters --> lm["Metrics (aiap/env/logs)"]
+    infra["Infrastructure"] --> im["Metrics (AWS/EC2 · CWAgent)"]
+    lm --> dash["Dashboards"]
+    im --> dash
+    lm --> alarms["Alarms"]
+    im --> alarms
+    dash --> ops(["Operators"])
+    alarms --> ops
+
+    classDef store fill:#3F8624,stroke:#243B0B,color:#FFFFFF
+    class logs,lm,im,dash store
+```
+
+### What it monitors, and what it refuses to
+
+- **Infrastructure** — CPU, network and status checks from EC2; **memory and disk**
+  from the CloudWatch agent (which, it turned out, was shipping logs only — AWS
+  cannot see inside the guest, so the baked agent config grew a metrics section).
+- **Lambda** — invocations, errors, duration (p99), throttles, concurrency.
+- **Application** — workflow success/failure and latency, AI request count and
+  response time, active executions, OpenClaw and n8n activity; plus error and
+  failure counts derived from the logs by metric filter.
+- **Health** — `/healthz` (liveness → *restart me*) and `/readyz` (readiness →
+  *route around me*), kept firmly separate because mixing them turns a dependency
+  blip into a fleet-wide crash loop.
+- **Tracing** — X-Ray active tracing on the webhook Lambda, with the trace ID stamped
+  into every log line. It traces the platform's own Lambda and **admits where it
+  stops**: it cannot instrument OpenClaw or n8n (other repositories), and it does not
+  cross EventBridge (an intentional decoupling). The correlation id carries the story
+  the trace cannot.
+
+### Deploy it
+
+```bash
+cd infra
+make monitoring ALARM_EMAIL=you@example.com   # dashboards, alarms, metric filters, SNS
+make webhook                                  # redeploy the webhook with X-Ray tracing on
+make ami && make deploy-ami                    # pick up the agent's new memory/disk metrics
+```
+
+```bash
+# See exactly what lands in CloudWatch — a structured log line and its EMF metric.
+OBS_METRICS_NAMESPACE=aiap/app go run ./cmd/observe emit --dim Workflow=blog-generator
+```
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -1539,7 +1683,7 @@ Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
 | Hybrid provider routing | The provider abstraction (Ollama + Bedrock) | [M10](#milestone-10--hybrid-ai-routing) |
 | Autonomous agent loop | The loop controller (a pure reducer) | [M11](#milestone-11--loop-engineering) |
 | Event ingress | GitHub webhooks · AWS Lambda · Amazon EventBridge | [M12](#milestone-12--github-webhook-automation) |
-| Observability | Amazon CloudWatch | [M15](#milestone-15--monitoring--observability) |
+| Observability | Amazon CloudWatch | [M13](#milestone-13--monitoring--observability) |
 | Release tooling | Go (standard library only) | ✅ implemented |
 
 ## Repository Scope
@@ -1615,12 +1759,12 @@ of them, and never will.
 | `self-hosted-n8n-on-aws` | Deploys the n8n workflow engine on AWS | [M5](#milestone-5--self-hosted-n8n-integration) | ✅ **Wired** — see [WORKFLOWS.md](WORKFLOWS.md) |
 | `openclaw-on-aws` | Deploys the OpenClaw agent runtime on AWS | [M6](#milestone-6--openclaw-integration) | ✅ **Wired** — see [AGENTS.md](AGENTS.md) |
 | `ollama-on-aws` | Deploys Ollama inference nodes on AWS | [M7](#milestone-7--ollama-integration) | ✅ **Wired** — see [INFERENCE.md](INFERENCE.md) |
-| `ai-github-repository-blog-generator` | An agent that reads a repository and drafts a technical post | [M13](#milestone-13--ai-github-repository-blog-generator-integration) | 📋 Planned |
+| `ai-github-repository-blog-generator` | An agent that reads a repository and drafts a technical post | *deferred* | 📋 Planned |
 
 ## Roadmap
 
-Twenty milestones, in six phases, followed by one planned future extension. Each
-milestone is a working increment and a blog post. **None have been started.**
+Seventeen milestones, in six phases, followed by one planned future extension. Each
+milestone is a working increment and a blog post.
 
 ```mermaid
 flowchart TB
@@ -1640,16 +1784,16 @@ flowchart TB
         m7["M7 · Ollama"] --> m8["M8 · Bedrock"] --> m9["M9 · Claude"] --> m10["M10 · Hybrid Routing"]
     end
 
-    subgraph p4["Phase 4 · Agent behaviour"]
-        m11["M11 · Loop Engineering"] --> m12["M12 · GitHub Webhooks"] --> m13["M13 · Blog Generator"] --> m14["M14 · Publishing"]
+    subgraph p4["Phase 4 · Agent behaviour & operations"]
+        m11["M11 · Loop Engineering"] --> m12["M12 · GitHub Webhooks"] --> m13["M13 · Monitoring"]
     end
 
     subgraph p5["Phase 5 · Production readiness"]
-        m15["M15 · Monitoring"] --> m16["M16 · Security"] --> m17["M17 · CI/CD"] --> m18["M18 · Cost"] --> m19["M19 · Scalability"]
+        m14["M14 · Security"] --> m15["M15 · Cost"] --> m16["M16 · Scalability"]
     end
 
     subgraph p6["Phase 6 · Beyond"]
-        m20["M20 · Future Extensions"] --> mcp["MCP Integration"]
+        m17["M17 · Future Extensions"] --> mcp["MCP Integration"]
     end
 
     p0 --> p1 --> p2 --> p3 --> p4 --> p5 --> p6
@@ -1713,7 +1857,7 @@ flowchart TB
 - **Outcome** — Compute at ~70% off, whose interruptions are visible (metrics per
   instance type), absorbed (work drained to S3 inside the two-minute window), and
   cheap. Capacity-optimised allocation across a *fleet* needs an Auto Scaling
-  group and is deliberately deferred to Milestone 19; the launch template this
+  group and is deliberately deferred to Milestone 16; the launch template this
   milestone builds on is what makes that a drop-in change.
 
 #### Milestone 4 — Custom AMIs
@@ -1882,7 +2026,7 @@ flowchart TB
   *This milestone collected the bet Milestone 7 made: the "provider abstraction" grew by
   four struct fields and one error, and no caller changed.*
 
-### Phase 4 — Agent behaviour and automation
+### Phase 4 — Agent behaviour and operations
 
 #### Milestone 11 — Loop Engineering
 
@@ -1919,38 +2063,29 @@ flowchart TB
   redelivery produces one agent run, not two. *The webhook publishes an event and returns — n8n,
   OpenClaw and the models are downstream consumers of the bus, on their own schedule.*
 
-#### Milestone 13 — AI GitHub Repository Blog Generator Integration
+#### Milestone 13 — Monitoring & Observability
 
-- **Objective** — Integrate the first real agent: one that reads a repository and
-  drafts the post explaining it.
-- **Primary focus** — The contract between the platform and an agent it does not
-  own.
-- **Related technologies** — `ai-github-repository-blog-generator`, the agent
-  plane.
-- **Expected outcome** — A working agent whose deployment lives in its own
-  repository.
+- **Status** — ✅ **Shipped.** Library in [`internal/observability`](internal/observability)
+  and CLI in [`cmd/observe`](cmd/observe); stack in
+  [`infra/cloudformation/10-monitoring.yaml`](infra/cloudformation/10-monitoring.yaml);
+  reference in [OBSERVABILITY.md](OBSERVABILITY.md); the walkthrough is the blog post,
+  [Monitoring an AI Agent Platform with CloudWatch](docs/blog/monitoring-an-ai-agent-platform-with-cloudwatch.md).
+- **Objective** — Make the platform's behaviour, cost, and failures visible through
+  Amazon CloudWatch — pulled forward from its originally-planned slot, so the agent
+  milestones that follow are observable the moment they land.
+- **Primary focus** — One shared observability standard: structured logging with a
+  correlation ID that spans services, EMF metrics that cost nothing the logs did not,
+  dashboards, actionable alarms, liveness/readiness health probes, and X-Ray tracing
+  that is honest about where it stops.
+- **Related technologies** — Amazon CloudWatch (Logs, Metrics, Dashboards, Alarms,
+  EMF), the CloudWatch agent, AWS X-Ray, SNS, structured logging.
+- **Outcome** — Every major component is observable from one place; a metric and its
+  explanation are the same line; secrets and repository content are redacted by the
+  handler; and an operator is woken only by an alarm they can act on.
 
-#### Milestone 14 — Publishing Automation
+### Phase 5 — First agent and production readiness
 
-- **Objective** — Take a drafted post from generation to published, with a human
-  in the loop.
-- **Primary focus** — Review gates, the pull-request workflow, and what an agent
-  may never publish unattended.
-- **Related technologies** — GitHub Actions, the agent plane.
-- **Expected outcome** — Drafts arrive as pull requests; humans merge them.
-
-### Phase 5 — Production readiness
-
-#### Milestone 15 — Monitoring & Observability
-
-- **Objective** — Make the platform's behaviour, cost, and failures visible.
-- **Primary focus** — Agent-specific telemetry: tokens, loop iterations, provider
-  mix, Spot interruptions.
-- **Related technologies** — Amazon CloudWatch, structured logging.
-- **Expected outcome** — Dashboards and alarms for the questions an operator will
-  actually ask.
-
-#### Milestone 16 — Security
+#### Milestone 14 — Security
 
 - **Objective** — Harden the boundary around software that does what it is told.
 - **Primary focus** — Prompt injection as a privilege-escalation problem; least
@@ -1959,15 +2094,7 @@ flowchart TB
 - **Expected outcome** — An agent that cannot reach what it does not need, however
   it is persuaded.
 
-#### Milestone 17 — CI/CD
-
-- **Objective** — Deliver platform changes safely and repeatably.
-- **Primary focus** — Infrastructure validation, change review, and staged
-  rollout.
-- **Related technologies** — GitHub Actions, CloudFormation change sets.
-- **Expected outcome** — Reviewed, tested, reversible infrastructure changes.
-
-#### Milestone 18 — Cost Optimization
+#### Milestone 15 — Cost Optimization
 
 - **Objective** — Make the platform affordable to leave running.
 - **Primary focus** — Idle GPU, batch inference, prompt caching, and enforced
@@ -1975,7 +2102,7 @@ flowchart TB
 - **Related technologies** — Spot, Bedrock batch, AWS Budgets.
 - **Expected outcome** — A measured cost model, and circuit-breakers that hold.
 
-#### Milestone 19 — Scalability
+#### Milestone 16 — Scalability
 
 - **Objective** — Establish how the platform grows, and where it stops.
 - **Primary focus** — Scaling each plane independently; queue depth as the
@@ -1985,7 +2112,7 @@ flowchart TB
 
 ### Phase 6 — Beyond
 
-#### Milestone 20 — Future Extensions
+#### Milestone 17 — Future Extensions
 
 - **Objective** — Extend the platform beyond its original workloads.
 - **Primary focus** — Additional agents, additional providers, and multi-tenancy.

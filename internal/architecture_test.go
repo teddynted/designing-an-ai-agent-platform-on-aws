@@ -417,3 +417,28 @@ func TestTheInferencePlaneDoesNotKnowWhatYAMLIs(t *testing.T) {
 		}
 	}
 }
+
+// TestObservabilityIsALeaf guards Milestone 13's seam, and it is the same rule as
+// internal/format, for the same reason.
+//
+// internal/observability is the platform's shared logging, metrics and health
+// standard. Its entire value is that ANY package may depend on it — internal/llm,
+// internal/workflow, a Lambda handler, a future package written next year. That is
+// only true while it depends on nothing of ours: the moment it imported
+// internal/workflow "just for the correlation type", the inference plane could no
+// longer use it without dragging the workflow engine in behind it, and the one
+// utility that is supposed to be usable everywhere would be usable almost nowhere.
+//
+// So it imports only the standard library, and this test fails the build if that
+// ever stops holding — exactly as it does for the format validator.
+func TestObservabilityIsALeaf(t *testing.T) {
+	deps := transitiveImports(t, module+"observability")
+	for dep := range deps {
+		if len(dep) > len(module) && dep[:len(module)] == module {
+			t.Errorf("internal/observability imports %s — it is a leaf.\n\n"+
+				"The observability layer is the one utility that must be usable from EVERY package,\n"+
+				"and that is only true while it depends on nothing of ours. It logs, measures and\n"+
+				"reports health; it must not learn what any of the things it observes actually do.", dep)
+		}
+	}
+}

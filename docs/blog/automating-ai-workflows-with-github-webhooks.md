@@ -239,7 +239,7 @@ plug into it without the Lambda changing:
 
 - **A dead-letter queue and event replay** are a rule and a queue on the same bus — the events are
   already there, structured and correlated.
-- **Additional event consumers** — an audit trail, a metrics aggregator (Milestone 15's
+- **Additional event consumers** — an audit trail, a metrics aggregator (Milestone 13's
   observability) — are new rules, not new endpoints.
 - **GitHub Apps and organization webhooks** replace how the request is authenticated and how many
   repositories it covers, behind the same verify-parse-filter-publish shape.

@@ -1,0 +1,784 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  AI Agent Platform — Monitoring & Observability (Milestone 13).
+  The visibility layer that sits on top of everything the earlier stacks built:
+  CloudWatch dashboards, alarms, metric filters and an SNS notification path, plus
+  a reusable telemetry IAM policy (custom metrics + AWS X-Ray). Milestone 2's
+  06-observability stack decided WHERE logs land and how long they are kept; this
+  stack decides what the platform SHOWS an operator and what it WAKES one up for.
+  It reads from three metric sources — AWS/EC2 (host basics), CWAgent (memory and
+  disk), and the platform's own custom namespaces (EMF application metrics and
+  log-derived metrics) — and turns them into three dashboards and a set of alarms
+  that follow the AWS Well-Architected "detect, then respond" model.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aiap
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Lower-case project prefix. Must match the other stacks.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment. Must match the other stacks.
+
+  InstanceId:
+    Type: String
+    Default: ""
+    Description: >-
+      The EC2 instance to monitor for CPU, memory, disk and status checks. Empty
+      deploys the stack WITHOUT the host alarms and host dashboard widgets — the
+      Lambda and application monitoring still deploy. The Makefile resolves this
+      from the compute stack's output, exactly as it does for the scheduler.
+
+      Per-instance alarms are the honest shape while the platform runs a single
+      instance: when an interruption replaces it, its metrics stop and the alarm
+      goes to INSUFFICIENT_DATA. The Auto Scaling group (Milestone 16) is what lets
+      these alarms move to an ASG dimension and survive a replacement — the
+      limitation is deliberate and documented in OBSERVABILITY.md.
+
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: >-
+      Email address to subscribe to the alarm SNS topic. Empty creates the topic
+      with no subscription (other consumers can subscribe later). A real address
+      receives an AWS confirmation email that must be clicked before anything is
+      delivered.
+
+  AppMetricNamespace:
+    Type: String
+    Default: aiap/app
+    Description: >-
+      The CloudWatch namespace the platform's application emits EMF metrics into.
+      Must match OBS_METRICS_NAMESPACE in the running services (see
+      internal/observability). Its own scope, not the log namespace, because a
+      metric and a log line are different products of the same line.
+
+  # --- alarm thresholds (all tunable; the defaults are deliberately conservative
+  #     so a dev environment is not noisy and a prod one is not deaf) ------------
+  CpuHighPercent:
+    Type: Number
+    Default: 85
+    MinValue: 1
+    MaxValue: 100
+    Description: CPU utilization (%) that, sustained, raises the high-CPU alarm.
+
+  MemoryHighPercent:
+    Type: Number
+    Default: 85
+    MinValue: 1
+    MaxValue: 100
+    Description: Memory used (%) that raises the high-memory alarm. Needs the CloudWatch agent's memory metric.
+
+  DiskHighPercent:
+    Type: Number
+    Default: 85
+    MinValue: 1
+    MaxValue: 100
+    Description: Disk used (%) that raises the low-disk alarm.
+
+  LambdaErrorThreshold:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    Description: Lambda errors in a period that raise the errors alarm. 1 = tell me about the first one.
+
+  WebhookDurationThresholdMs:
+    Type: Number
+    Default: 5000
+    MinValue: 1
+    Description: >-
+      p99 webhook duration (ms) that raises the slow-webhook alarm. GitHub gives a
+      webhook ~10s; 5s of p99 is the early warning before that becomes a timeout
+      and a retry.
+
+  AppFailureThreshold:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    Description: >-
+      Application failures (workflow, AI, orchestration) in a period that raise the
+      corresponding alarm.
+
+  RetryStormThreshold:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    Description: >-
+      Retries-exhausted events in a period that raise the excessive-retries alarm.
+      Higher than a single failure: one exhausted retry is a bad request, a burst
+      of them is a dependency falling over.
+
+  AlarmPeriodSeconds:
+    Type: Number
+    Default: 300
+    AllowedValues: [60, 300, 900]
+    Description: The evaluation period for the alarms, in seconds.
+
+Conditions:
+  # Host alarms and host dashboard widgets only make sense with an instance to
+  # point them at. Without one, the rest of the stack (Lambda + application) still
+  # deploys — which is what lets monitoring be stood up before, or independently
+  # of, the compute stack.
+  HasInstance: !Not [!Equals [!Ref InstanceId, ""]]
+  HasEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
+
+Resources:
+  # ===========================================================================
+  # Notification path. Every alarm points here; a human (or PagerDuty, or a chat
+  # webhook) subscribes here. One topic, so "where do alarms go?" has one answer.
+  # ===========================================================================
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-alarms"
+      DisplayName: !Sub "${ProjectName} ${Environment} alarms"
+
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasEmail
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  # ===========================================================================
+  # Metric filters — the log-to-metric path.
+  #
+  # These turn the structured log lines the platform ALREADY emits into countable,
+  # alarmable metrics, without the emitting code changing at all. They are the
+  # belt to the EMF braces: EMF (internal/observability) gives rich application
+  # metrics from the code that chooses to emit them; these give error and failure
+  # counts from any line that matches the platform's structured log schema, so a
+  # service that only logs is still observable.
+  #
+  # The patterns match the JSON fields the services emit (see internal/workflow's
+  # "workflow failed" line, and the retriesExhausted / errorKind fields on it).
+  # They live in a metrics namespace scoped to this project and environment.
+  # ===========================================================================
+  PlatformErrorFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PlatformLogGroupName"
+      FilterName: !Sub "${ProjectName}-${Environment}-errors"
+      # Any ERROR-level structured line. The most general failure signal there is.
+      FilterPattern: '{ $.level = "ERROR" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/logs"
+          MetricName: Errors
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  WorkflowFailureFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PlatformLogGroupName"
+      FilterName: !Sub "${ProjectName}-${Environment}-workflow-failures"
+      # internal/workflow logs exactly this message when a workflow fails.
+      FilterPattern: '{ $.msg = "workflow failed" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/logs"
+          MetricName: WorkflowFailures
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  RetriesExhaustedFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-PlatformLogGroupName"
+      FilterName: !Sub "${ProjectName}-${Environment}-retries-exhausted"
+      # The platform surrendered to a failure after retrying. A burst is a
+      # dependency outage, not a bad request.
+      FilterPattern: '{ $.retriesExhausted IS TRUE }'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/logs"
+          MetricName: RetriesExhausted
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  # The agent workloads (OpenClaw, Ollama, n8n side of the platform) log to the
+  # agent log group. An error there is an AI failure / failed orchestration.
+  AgentErrorFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-AgentLogGroupName"
+      FilterName: !Sub "${ProjectName}-${Environment}-agent-errors"
+      FilterPattern: '{ $.level = "ERROR" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/logs"
+          MetricName: AIFailures
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  AgentOutputRejectedFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-AgentLogGroupName"
+      FilterName: !Sub "${ProjectName}-${Environment}-agent-rejected"
+      # internal/agent rejects an agent's output that looks like a leaked
+      # credential — a security event worth a metric of its own.
+      FilterPattern: '{ $.errorKind = "output_rejected" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/logs"
+          MetricName: FailedOrchestrations
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  # ===========================================================================
+  # Telemetry IAM policy — the least-privilege grant for emitting custom metrics
+  # and X-Ray segments.
+  #
+  # EMF needs NO extra permission (it is a log line, under the logging grant the
+  # roles already hold). This policy is for the two things that DO need a grant:
+  # the direct PutMetricData API (namespace-scoped, never "*") and AWS X-Ray. It
+  # is attached to the platform's stable core roles by name, and exported so a
+  # future role can attach it too.
+  # ===========================================================================
+  TelemetryPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-${Environment}-telemetry"
+      Description: Emit custom metrics (namespace-scoped) and X-Ray trace segments.
+      Roles:
+        - !Sub "${ProjectName}-${Environment}-instance-role"
+        - !Sub "${ProjectName}-${Environment}-lambda-role"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # PutMetricData admits no resource ARN — the only expressible scope is the
+          # namespace condition key, so it is bounded to the platform's own
+          # namespaces and cannot be used to write (and bill) into arbitrary ones.
+          - Sid: PutScopedMetrics
+            Effect: Allow
+            Action: cloudwatch:PutMetricData
+            Resource: "*"
+            Condition:
+              StringEquals:
+                cloudwatch:namespace:
+                  - !Ref AppMetricNamespace
+                  - !Sub "${ProjectName}/${Environment}/logs"
+          # X-Ray's write actions take no resource-level permissions either; "*" is
+          # the only form the API accepts, and it is write-only telemetry, not data
+          # access. Enabling active tracing on a Lambda needs exactly these two.
+          - Sid: WriteXRay
+            Effect: Allow
+            Action:
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+              - xray:GetSamplingRules
+              - xray:GetSamplingTargets
+            Resource: "*"
+
+  # ===========================================================================
+  # ALARMS — Infrastructure (the host). Conditional on an InstanceId.
+  # ===========================================================================
+  HighCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasInstance
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-cpu-high"
+      AlarmDescription: !Sub "EC2 CPU sustained above ${CpuHighPercent}%."
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+      Statistic: Average
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 2
+      Threshold: !Ref CpuHighPercent
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  HighMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasInstance
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-memory-high"
+      AlarmDescription: !Sub "EC2 memory used above ${MemoryHighPercent}% (needs the CloudWatch agent memory metric)."
+      Namespace: CWAgent
+      MetricName: mem_used_percent
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+      Statistic: Average
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 2
+      Threshold: !Ref MemoryHighPercent
+      ComparisonOperator: GreaterThanThreshold
+      # Missing, not breaching: a memory metric only exists once the agent's
+      # metrics section ships it. Absence means "not yet reporting", not "on fire".
+      TreatMissingData: missing
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  LowDiskAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasInstance
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-disk-high"
+      AlarmDescription: !Sub "EC2 root disk used above ${DiskHighPercent}%."
+      Namespace: CWAgent
+      MetricName: disk_used_percent
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+      Statistic: Average
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: !Ref DiskHighPercent
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: missing
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  InstanceUnhealthyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasInstance
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-instance-unhealthy"
+      AlarmDescription: EC2 status checks are failing — the instance or its host is unhealthy.
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref InstanceId
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  # ===========================================================================
+  # ALARMS — Lambda. Keyed on FunctionName, which is a dimension string, so these
+  # deploy and are valid even before the function's own stack is deployed (they
+  # simply sit in INSUFFICIENT_DATA until it reports). The webhook is the platform's
+  # front door and gets all three; the fire-and-forget spot handlers get errors and
+  # throttles. The same three-line pattern extends to any other function.
+  # ===========================================================================
+  WebhookErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-webhook-errors"
+      AlarmDescription: The webhook Lambda is erroring — authentic events are failing to publish.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-${Environment}-webhook"
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: !Ref LambdaErrorThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  WebhookDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-webhook-slow"
+      AlarmDescription: !Sub "Webhook p99 duration above ${WebhookDurationThresholdMs}ms — heading toward GitHub's 10s timeout."
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-${Environment}-webhook"
+      ExtendedStatistic: p99
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 2
+      Threshold: !Ref WebhookDurationThresholdMs
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  WebhookThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-webhook-throttles"
+      AlarmDescription: The webhook Lambda is being throttled — concurrency is exhausted.
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-${Environment}-webhook"
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  SpotInterruptionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-spot-interruption-errors"
+      AlarmDescription: The Spot interruption handler is erroring — interruptions may go uncounted and un-drained.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-${Environment}-spot-interruption"
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: !Ref LambdaErrorThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  SpotStateChangeErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-spot-statechange-errors"
+      AlarmDescription: The Spot state-change handler is erroring.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${ProjectName}-${Environment}-spot-statechange"
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: !Ref LambdaErrorThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  # ===========================================================================
+  # ALARMS — Application. Built on the log-derived metrics above, so they fire on
+  # what the platform's own services report about themselves.
+  # ===========================================================================
+  WorkflowFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-workflow-failures"
+      AlarmDescription: Workflows are failing (an n8n execution reported failure, or the trigger did not land).
+      Namespace: !Sub "${ProjectName}/${Environment}/logs"
+      MetricName: WorkflowFailures
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: !Ref AppFailureThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  AIFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-ai-failures"
+      AlarmDescription: The agent/inference plane is logging errors (an inference or an agent execution failed).
+      Namespace: !Sub "${ProjectName}/${Environment}/logs"
+      MetricName: AIFailures
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: !Ref AppFailureThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  FailedOrchestrationsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-failed-orchestrations"
+      AlarmDescription: An agent's output was rejected (looks like a leaked credential) — a security-relevant orchestration failure.
+      Namespace: !Sub "${ProjectName}/${Environment}/logs"
+      MetricName: FailedOrchestrations
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: !Ref AppFailureThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  ExcessiveRetriesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-excessive-retries"
+      AlarmDescription: !Sub "More than ${RetryStormThreshold} retries were exhausted in a period — a dependency is likely down, not just a bad request."
+      Namespace: !Sub "${ProjectName}/${Environment}/logs"
+      MetricName: RetriesExhausted
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: !Ref RetryStormThreshold
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  # ===========================================================================
+  # DASHBOARDS. Three, by audience: the host, the AI platform, the application.
+  # A dashboard body is a JSON string; Fn::Sub fills in the project, environment,
+  # region, instance and namespaces.
+  # ===========================================================================
+  InfrastructureDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ProjectName}-${Environment}-infrastructure"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text", "x": 0, "y": 0, "width": 24, "height": 1,
+              "properties": { "markdown": "# ${ProjectName} ${Environment} — Infrastructure  ·  EC2 host health and Lambda health" }
+            },
+            {
+              "type": "metric", "x": 0, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "EC2 CPU %", "region": "${AWS::Region}", "view": "timeSeries",
+                "metrics": [ [ "AWS/EC2", "CPUUtilization", "InstanceId", "${InstanceId}" ] ],
+                "yAxis": { "left": { "min": 0, "max": 100 } },
+                "annotations": { "horizontal": [ { "label": "high", "value": ${CpuHighPercent} } ] }
+              }
+            },
+            {
+              "type": "metric", "x": 8, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "Memory % / Disk %  (CloudWatch agent)", "region": "${AWS::Region}", "view": "timeSeries",
+                "metrics": [
+                  [ "CWAgent", "mem_used_percent", "InstanceId", "${InstanceId}" ],
+                  [ "CWAgent", "disk_used_percent", "InstanceId", "${InstanceId}" ]
+                ],
+                "yAxis": { "left": { "min": 0, "max": 100 } }
+              }
+            },
+            {
+              "type": "metric", "x": 16, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "Network (bytes)", "region": "${AWS::Region}", "view": "timeSeries",
+                "metrics": [
+                  [ "AWS/EC2", "NetworkIn", "InstanceId", "${InstanceId}" ],
+                  [ "AWS/EC2", "NetworkOut", "InstanceId", "${InstanceId}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 7, "width": 6, "height": 6,
+              "properties": {
+                "title": "Status checks (0 = healthy)", "region": "${AWS::Region}", "view": "timeSeries", "stat": "Maximum",
+                "metrics": [
+                  [ "AWS/EC2", "StatusCheckFailed", "InstanceId", "${InstanceId}" ],
+                  [ "AWS/EC2", "StatusCheckFailed_Instance", "InstanceId", "${InstanceId}" ],
+                  [ "AWS/EC2", "StatusCheckFailed_System", "InstanceId", "${InstanceId}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 6, "y": 7, "width": 6, "height": 6,
+              "properties": {
+                "title": "Lambda invocations", "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum",
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${ProjectName}-${Environment}-webhook" ],
+                  [ "...", "${ProjectName}-${Environment}-spot-interruption" ],
+                  [ "...", "${ProjectName}-${Environment}-spot-statechange" ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 7, "width": 6, "height": 6,
+              "properties": {
+                "title": "Lambda errors + throttles", "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum",
+                "metrics": [
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${ProjectName}-${Environment}-webhook" ],
+                  [ "AWS/Lambda", "Throttles", "FunctionName", "${ProjectName}-${Environment}-webhook" ],
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${ProjectName}-${Environment}-spot-interruption" ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 18, "y": 7, "width": 6, "height": 6,
+              "properties": {
+                "title": "Lambda duration p99 (ms)", "region": "${AWS::Region}", "view": "timeSeries", "stat": "p99",
+                "metrics": [
+                  [ "AWS/Lambda", "Duration", "FunctionName", "${ProjectName}-${Environment}-webhook" ]
+                ]
+              }
+            }
+          ]
+        }
+
+  AIPlatformDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ProjectName}-${Environment}-ai-platform"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text", "x": 0, "y": 0, "width": 24, "height": 1,
+              "properties": { "markdown": "# ${ProjectName} ${Environment} — AI Platform  ·  workflows, OpenClaw, n8n, inference  (custom EMF metrics: ${AppMetricNamespace})" }
+            },
+            {
+              "type": "metric", "x": 0, "y": 1, "width": 12, "height": 6,
+              "properties": {
+                "title": "Workflow executions (success / failure)", "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum",
+                "metrics": [
+                  [ "${AppMetricNamespace}", "WorkflowSuccess" ],
+                  [ "${AppMetricNamespace}", "WorkflowFailures" ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 1, "width": 12, "height": 6,
+              "properties": {
+                "title": "Active executions / queue length", "region": "${AWS::Region}", "view": "timeSeries", "stat": "Average",
+                "metrics": [
+                  [ "${AppMetricNamespace}", "ActiveExecutions" ],
+                  [ "${AppMetricNamespace}", "QueueLength" ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "OpenClaw agent executions", "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum",
+                "metrics": [
+                  [ "${AppMetricNamespace}", "AgentExecutions" ],
+                  [ "${AppMetricNamespace}", "AgentFailures" ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 8, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "n8n workflow executions", "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum",
+                "metrics": [ [ "${AppMetricNamespace}", "N8nExecutions" ] ]
+              }
+            },
+            {
+              "type": "metric", "x": 16, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "AI inference duration (ms)", "region": "${AWS::Region}", "view": "timeSeries",
+                "metrics": [
+                  [ "${AppMetricNamespace}", "AIResponseTimeMs", { "stat": "p50" } ],
+                  [ "${AppMetricNamespace}", "AIResponseTimeMs", { "stat": "p99" } ]
+                ]
+              }
+            }
+          ]
+        }
+
+  ApplicationDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ProjectName}-${Environment}-application"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text", "x": 0, "y": 0, "width": 24, "height": 1,
+              "properties": { "markdown": "# ${ProjectName} ${Environment} — Application  ·  errors, throughput, success rate, latency" }
+            },
+            {
+              "type": "metric", "x": 0, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "Error counts (from logs)", "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum",
+                "metrics": [
+                  [ "${ProjectName}/${Environment}/logs", "Errors" ],
+                  [ "${ProjectName}/${Environment}/logs", "WorkflowFailures" ],
+                  [ "${ProjectName}/${Environment}/logs", "AIFailures" ],
+                  [ "${ProjectName}/${Environment}/logs", "RetriesExhausted" ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 8, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "Throughput — AI requests", "region": "${AWS::Region}", "view": "timeSeries", "stat": "Sum",
+                "metrics": [
+                  [ "${AppMetricNamespace}", "AIRequests" ],
+                  [ "${AppMetricNamespace}", "WorkflowInvocations" ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 16, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "Workflow success rate (%)", "region": "${AWS::Region}", "view": "timeSeries",
+                "metrics": [
+                  [ "${AppMetricNamespace}", "WorkflowSuccess", { "id": "s", "stat": "Sum", "visible": false } ],
+                  [ "${AppMetricNamespace}", "WorkflowFailures", { "id": "f", "stat": "Sum", "visible": false } ],
+                  [ { "expression": "100*(s/(s+f))", "label": "success rate %", "id": "rate" } ]
+                ],
+                "yAxis": { "left": { "min": 0, "max": 100 } }
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 7, "width": 12, "height": 6,
+              "properties": {
+                "title": "Workflow latency (ms)", "region": "${AWS::Region}", "view": "timeSeries",
+                "metrics": [
+                  [ "${AppMetricNamespace}", "WorkflowDurationMs", { "stat": "p50" } ],
+                  [ "${AppMetricNamespace}", "WorkflowDurationMs", { "stat": "p99" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 7, "width": 12, "height": 6,
+              "properties": {
+                "title": "Alarming signals", "region": "${AWS::Region}", "view": "singleValue", "stat": "Sum",
+                "metrics": [
+                  [ "${ProjectName}/${Environment}/logs", "WorkflowFailures" ],
+                  [ "${ProjectName}/${Environment}/logs", "AIFailures" ],
+                  [ "${ProjectName}/${Environment}/logs", "FailedOrchestrations" ],
+                  [ "${ProjectName}/${Environment}/logs", "RetriesExhausted" ]
+                ]
+              }
+            }
+          ]
+        }
+
+Outputs:
+  AlarmTopicArn:
+    Description: SNS topic every alarm publishes to. Subscribe to receive notifications.
+    Value: !Ref AlarmTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-AlarmTopicArn"
+
+  TelemetryPolicyArn:
+    Description: Managed policy granting scoped PutMetricData + X-Ray. Attach to any role that emits telemetry.
+    Value: !Ref TelemetryPolicy
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-TelemetryPolicyArn"
+
+  LogMetricNamespace:
+    Description: The namespace the log-derived metrics (Errors, WorkflowFailures, ...) land in.
+    Value: !Sub "${ProjectName}/${Environment}/logs"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-LogMetricNamespace"
+
+  DashboardsUrl:
+    Description: Console link to the platform's CloudWatch dashboards.
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:"

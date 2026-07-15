@@ -24,7 +24,7 @@ PURCHASE    ?= spot
 #     --region-names us-east-1 --single-availability-zone
 #
 # A single instance in a single AZ has no capacity flexibility by construction;
-# diversifying across types and AZs needs an Auto Scaling group (Milestone 19).
+# diversifying across types and AZs needs an Auto Scaling group (Milestone 16).
 INSTANCE_TYPE ?=
 
 # Instance scheduler (07-scheduler): the instance to start/stop, its timezone,
@@ -49,6 +49,13 @@ PARAMS      := ProjectName=$(PROJECT) Environment=$(ENV)
 TAGS        := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=2
 # Spot interruption handling is Milestone 3, so its resources are tagged as such.
 SPOT_TAGS   := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=3
+# Monitoring & observability is Milestone 13.
+MON_TAGS    := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=13
+
+# Alarm notification email for the monitoring stack (10-monitoring). Empty deploys
+# the SNS topic with no subscription; set it to receive alarm emails (AWS sends a
+# confirmation you must click first).
+ALARM_EMAIL ?=
 
 # Per-stack extra parameter overrides. Only the compute stack declares
 # PurchaseOption and InstanceType, so they must be passed to that stack alone —
@@ -78,6 +85,7 @@ STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observabilit
 .PHONY: lambda-test lambda-vet package deploy-scheduler delete-scheduler
 .PHONY: spot deploy-spot delete-spot simulate-interruption
 .PHONY: webhook deploy-webhook delete-webhook
+.PHONY: monitoring deploy-monitoring delete-monitoring
 .PHONY: ami ami-list ami-prune deploy-ami drain-sync check-drain-sync startup-benchmark
 .PHONY: help lint validate deploy delete outputs bootstrap install-hooks import-storage
 
@@ -184,7 +192,7 @@ import-storage: ## Fix the storage stack alone (adopts an orphaned artifact buck
 # `make deploy`), but a stack you deployed is a stack you want the outputs of.
 # Undeployed ones simply print "(not deployed)".
 outputs: ## Print the outputs of every deployed stack
-	@for s in $(STACKS) 07-scheduler 08-spot 09-webhook; do \
+	@for s in $(STACKS) 07-scheduler 08-spot 09-webhook 10-monitoring; do \
 		echo "== $(PROJECT)-$(ENV)-$$s =="; \
 		aws cloudformation describe-stacks --region $(REGION) \
 			--stack-name $(PROJECT)-$(ENV)-$$s \
@@ -364,6 +372,44 @@ deploy-webhook: ## Deploy the GitHub webhook stack (run `package` first, or use 
 delete-webhook: ## Delete the GitHub webhook stack
 	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-09-webhook
 	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-09-webhook
+
+# --- Monitoring & observability (Milestone 13) ------------------------------
+#
+# Dashboards, alarms, metric filters, an SNS topic and a telemetry IAM policy.
+# Pure CloudFormation — no Go to build — so it needs nothing but the AWS CLI. It
+# reads the instance to monitor from the compute stack's output, exactly as the
+# scheduler does, so nothing is hard-coded. With no instance deployed it still
+# stands up the Lambda and application monitoring; the host alarms are simply
+# omitted until there is a host to point them at.
+
+# The instance to monitor, resolved from the compute stack. Empty is fine: the
+# host alarms are then skipped (Condition HasInstance in the template).
+define monitored_instance
+$(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-$(ENV)-03-compute \
+	--region $(REGION) --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
+	--output text 2>/dev/null | grep -v None)
+endef
+
+monitoring: deploy-monitoring ## Deploy the monitoring & observability stack (dashboards, alarms)
+
+deploy-monitoring: ## Deploy monitoring (resolves the instance from 03-compute; ALARM_EMAIL=you@example.com to be notified)
+	@instance="$(strip $(call monitored_instance))"; \
+	[ -n "$$instance" ] && echo "monitoring instance $$instance" || echo "no compute instance found — host alarms will be skipped"; \
+	aws cloudformation deploy \
+		--stack-name $(PROJECT)-$(ENV)-10-monitoring \
+		--template-file $(CFN_DIR)/10-monitoring.yaml \
+		--region $(REGION) --capabilities $(CAPS) \
+		--parameter-overrides $(PARAMS) \
+			$(if $(strip $(call monitored_instance)),InstanceId=$(strip $(call monitored_instance))) \
+			$(if $(ALARM_EMAIL),AlarmEmail=$(ALARM_EMAIL)) \
+		--tags $(MON_TAGS)
+	@echo "monitoring deployed. Dashboards:"
+	@echo "  $(PROJECT)-$(ENV)-infrastructure · $(PROJECT)-$(ENV)-ai-platform · $(PROJECT)-$(ENV)-application"
+	@echo "  https://$(REGION).console.aws.amazon.com/cloudwatch/home?region=$(REGION)#dashboards:"
+
+delete-monitoring: ## Delete the monitoring & observability stack
+	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-10-monitoring
+	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-10-monitoring
 
 # Rehearse an interruption without waiting for AWS to take the instance away.
 #

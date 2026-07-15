@@ -194,6 +194,19 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWA'
         ]
       }
     }
+  },
+  "metrics": {
+    "namespace": "CWAgent",
+    "append_dimensions": { "InstanceId": "${aws:InstanceId}" },
+    "aggregation_dimensions": [ ["InstanceId"] ],
+    "metrics_collected": {
+      "mem": { "measurement": [ "mem_used_percent" ] },
+      "disk": {
+        "measurement": [ "disk_used_percent" ],
+        "resources": [ "/" ],
+        "ignore_file_system_types": [ "sysfs", "devtmpfs", "tmpfs", "overlay" ]
+      }
+    }
   }
 }
 CWA

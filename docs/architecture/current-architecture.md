@@ -176,9 +176,11 @@ flowchart LR
         o["06 · observability"]
     end
 
-    subgraph addons["add-ons — need the Go toolchain"]
+    subgraph addons["add-ons — Go toolchain (07-09) or AWS CLI only (10)"]
         sch["07 · scheduler<br/>(optional)"]
         sp["08 · spot"]
+        wh["09 · webhook"]
+        mon["10 · monitoring"]
     end
 
     subgraph pipeline["NOT CloudFormation — a script"]
@@ -187,14 +189,18 @@ flowchart LR
     end
 
     e --> sp
+    e --> wh
     s -.->|"lambda zips"| sp
     s -.->|"lambda zips"| sch
+    s -.->|"lambda zips"| wh
+    o -.->|"log groups"| mon
+    c -.->|"InstanceId"| mon
     build --> img
     img -->|"AmiId parameter"| c
 
     classDef aws fill:#FF9900,stroke:#232F3E,color:#232F3E
     classDef store fill:#3F8624,stroke:#243B0B,color:#FFFFFF
-    class n,i,c,e,s,o,sch,sp aws
+    class n,i,c,e,s,o,sch,sp,wh,mon aws
     class build,img store
 ```
 
@@ -343,9 +349,9 @@ more than this:
 | **Failover** — Spot GPU interrupted → Bedrock | ❌ Not built (M10), and **harder than it looked at M8**. A conversation that has already run a `Write` tool cannot be replayed on another provider — replaying it would run the workflow again. This is a genuinely unsolved problem in the current design. |
 | RAG, vector store, prompt versioning | ❌ Not built. |
 | Any model inference **on our own hardware** | ❌ None. No GPU instance runs (cost + quota). Bedrock needs none — which is exactly its appeal, and exactly its bill. |
-| Auto Scaling group | ❌ Still **one** instance. The launch template is ready for it (M19). |
+| Auto Scaling group | ❌ Still **one** instance. The launch template is ready for it (M16). |
 | Private subnets / NAT | ❌ Public subnet only, deliberately (no $32/mo NAT). |
-| Alarms + dashboards | ❌ Metrics and logs exist; nothing alerts on them (M15). |
+| Alarms + dashboards | ✅ **Built (M13)** — three dashboards and alarms on an SNS path over the metrics and logs. See [OBSERVABILITY.md](../../OBSERVABILITY.md). |
 | Scheduled AMI rebuilds | ❌ Manual. A baked image gets staler every day. |
 
 The honest summary: **the platform can now orchestrate work, delegate it to an agent, think
