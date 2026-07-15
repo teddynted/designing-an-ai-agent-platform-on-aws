@@ -16,7 +16,8 @@
 [![Milestone 13](https://img.shields.io/badge/M13%20Observability-shipped-brightgreen)](docs/blog/monitoring-an-ai-agent-platform-with-cloudwatch.md)
 [![Milestone 14](https://img.shields.io/badge/M14%20Security-shipped-brightgreen)](docs/blog/securing-an-ai-agent-platform-on-aws.md)
 [![Milestone 15](https://img.shields.io/badge/M15%20Cost%20Optimization-shipped-brightgreen)](docs/blog/cost-optimization-strategies-for-ai-platforms-on-aws.md)
-[![Next milestone](https://img.shields.io/badge/next-M16%20Scalability-lightgrey)](#milestone-16--scalability)
+[![Milestone 16](https://img.shields.io/badge/M16%20Scalability-shipped-brightgreen)](docs/blog/scaling-an-ai-agent-platform-on-aws.md)
+[![Next milestone](https://img.shields.io/badge/next-M17%20Future%20Extensions-lightgrey)](#milestone-17--future-extensions)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -49,8 +50,14 @@
 > leave running by accident](COST.md): Spot, a scheduler and a 2.5s-boot AMI mean you pay for
 > instance-hours not calendar months, a local model answers the ordinary request for the price
 > of electricity while Bedrock is the paid exception, and an **AWS Budget plus Cost Anomaly
-> Detection** page the bill payer when an optimisation silently regresses. Everything from
-> [Milestone 16](#milestone-16--scalability) on is still a statement of intent. See [What exists today](#what-exists-today), which is
+> Detection** page the bill payer when an optimisation silently regresses. And it is now
+> [shaped to scale horizontally](SCALABILITY.md): a durable **SQS work queue** sits between the
+> event bus and the workers that run long-running AI tasks, so a burst is *absorbed* as queue
+> depth instead of dropped or throttled, a poison task lands in a dead-letter queue rather than
+> blocking the line, and that queue's depth is the exact signal a future worker fleet scales on —
+> the seam that makes horizontal scaling a drop-in, built without yet building the fleet.
+> Everything from
+> [Milestone 17](#milestone-17--future-extensions) on is still a statement of intent. See [What exists today](#what-exists-today), which is
 > kept honest.
 
 An open design study and reference implementation for running **autonomous AI
@@ -157,6 +164,7 @@ Being explicit, because everything else on this page is aspirational:
 | Monitoring & observability | ✅ **Implemented** | [Milestone 13](#monitoring-and-observability-with-cloudwatch): one shared observability standard — structured logging with a **correlation ID that spans services**, secrets and repository content **redacted by the handler**, **EMF** metrics that cost nothing the logs did not, three CloudWatch **dashboards**, actionable **alarms** on an SNS path, liveness/readiness **health probes**, and **X-Ray** tracing that is honest about where it stops. A leaf library ([`internal/observability`](internal/observability)) anything can import, a CFN stack ([`10-monitoring.yaml`](infra/cloudformation/10-monitoring.yaml)), and the CloudWatch agent now shipping memory and disk. See [OBSERVABILITY.md](OBSERVABILITY.md) |
 | Security & auditing | ✅ **Implemented** | [Milestone 14](#milestone-14--security): prompt injection treated as a **privilege-escalation** problem, not a content-filtering one. The agent's egress becomes an **allow-list** (HTTPS/HTTP/DNS) with a free **S3 gateway endpoint**, so a compromised process can't open an arbitrary socket to exfiltrate over; a multi-region **CloudTrail** with **log-file validation**, its own **KMS key**, and dual delivery to S3 **and** CloudWatch Logs; and the **CIS-benchmark alarm set** — root usage, denied calls, MFA-less sign-in, IAM/SG/trail changes — paging a **separate** security SNS topic. A CFN stack ([`11-security.yaml`](infra/cloudformation/11-security.yaml)) plus egress hardening in `01-network` and an SSE-KMS option in `04-storage`. See [SECURITY.md](SECURITY.md) |
 | Cost optimization | ✅ **Implemented** | [Milestone 15](#milestone-15--cost-optimization): the cost decisions were mostly made right upstream (**Spot**, a **scheduler**, a **2.5s-boot AMI** so stopping the box is free to undo, **local-first routing**, **arm64** everything, and **no NAT gateway** — ~\$32/mo designed out). This milestone adds the **FinOps guardrails** that keep it there — an **AWS Budget** with a forecasted-breach alert, per-service **Cost Anomaly Detection**, and a billing alarm, on their own SNS topic ([`12-cost.yaml`](infra/cloudformation/12-cost.yaml)) — plus two honest tunings (arm64 for the last x86 Lambda, S3 Intelligent-Tiering) and a full cost model. See [COST.md](COST.md) |
+| Scalability foundation | 🟡 **Partial (by design)** | [Milestone 16](#milestone-16--scalability): the one seam you need before horizontal scaling — a durable **SQS work queue** between the event bus and the workers that run long-running agent tasks, so a burst is **absorbed as queue depth** rather than dropped or throttled, arrival is **decoupled** from execution, and *N* workers can later share the load with no coordination. A **dead-letter queue** isolates poison tasks; **queue-depth/age alarms** are the exact signal a future fleet scales on ([`13-scalability.yaml`](infra/cloudformation/13-scalability.yaml)). It builds the **seam and the signal**, not the fleet — no Auto Scaling group, no multi-worker deploy, no distributed Ollama, all deferred on purpose. See [SCALABILITY.md](SCALABILITY.md) |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -450,7 +458,8 @@ Deliberately **not** built in this milestone, and each is its own piece of work:
   `capacity-optimized` allocation strategy is what turns "the instance was
   interrupted" into "a replacement is already running". The compute stack already
   provisions through a **launch template** specifically so this needs no
-  re-architecture. *(Milestone 16.)*
+  re-architecture, and [Milestone 16](#milestone-16--scalability) added the work
+  queue a fleet drains — the ASG itself is a later worker-fleet milestone.
 - **A baked AMI** to shrink the cold start an interruption costs. *(Milestone 4.)*
 - **Checkpointing** in the workloads themselves, so an interrupted job resumes
   rather than restarts.
@@ -601,7 +610,9 @@ Deliberately **not** built in this milestone:
   rebuild-and-roll with the previous AMI as the rollback is the right shape.
 - **Auto Scaling with a mixed-instances policy.** A fast-booting image is what makes
   an ASG *work* — the difference between replacing an interrupted instance in 76
-  seconds and in 3. *(Milestone 16.)*
+  seconds and in 3. [Milestone 16](#milestone-16--scalability) shipped the queue and
+  scaling signal an ASG target-tracks on; the ASG itself is a later worker-fleet
+  milestone.
 - **A minimal image.** Every package is attack surface and snapshot cost. A serving
   image and a build image probably should not be the same image.
 - **Cross-region copies**, if the platform ever runs in more than one region.
@@ -1814,6 +1825,71 @@ make cost COST_EMAIL=you@example.com BUDGET_LIMIT=50   # budget, anomaly detecti
 Full line-item breakdowns, the Ollama/Bedrock break-even, the Well-Architected mapping,
 and where to look first when the budget alarm fires are in **[COST.md](COST.md)**.
 
+## Milestone 16 — Scalability
+
+**Milestone 16.** The platform is reshaped so it *can* grow horizontally — a
+deliberately **partial** milestone that builds the one architectural seam
+horizontal scaling requires, and stops there. It stays a single deployment; what
+changes is that it is now *shaped* to become more than one, without a rewrite.
+
+> 📄 [Scaling an AI Agent Platform on AWS](docs/blog/scaling-an-ai-agent-platform-on-aws.md) — the blog post ·
+> 📐 [Scalability diagrams](docs/architecture/scalability-diagrams.md) ·
+> 🛠️ [SCALABILITY.md](SCALABILITY.md) — the reference
+
+### You cannot scale what you have not decoupled
+
+An Auto Scaling group makes more copies of a component, and more copies of a
+component wired to a synchronous bottleneck is more things queuing for the same
+bottleneck — contention, not throughput. Scalability is a *shape*: parts that grow
+independently, which requires decoupling, which requires separating **arrival** from
+**execution**. So this milestone adds exactly one seam and proves it, rather than
+reflexively bolting on a fleet.
+
+### The seam: a work queue between the bus and the workers
+
+A durable **SQS work queue** ([`13-scalability.yaml`](infra/cloudformation/13-scalability.yaml))
+now sits between the EventBridge bus and the workers that run long-running agent
+tasks. An event rule selects long-running tasks by `detail-type` and routes them to
+the queue; lightweight orchestration events keep their fast synchronous path. That
+one queue does three jobs, each a prerequisite for horizontal scale: it **absorbs
+bursts** (a spike becomes queue depth, not dropped work or a throttle), it
+**decouples** the producer from the consumer (publish and return, never wait on a
+worker being free), and it enables **share-nothing fan-out** (SQS hands each message
+to one receiver, so *N* workers later split the load with no coordination — adding a
+worker is adding a poller). A **dead-letter queue** isolates a poison task after
+bounded retries so it can't block the line, and a visibility timeout means a task on
+a crashed worker is retried automatically.
+
+### Build the signal before the fleet
+
+A foundation is only real if the thing built on it can see what it needs. Alongside
+the queue, this milestone publishes the **scaling signal** — CloudWatch alarms on
+queue **depth** (arrivals outrunning throughput) and oldest-message **age** (a fleet
+that has stalled entirely). These are the *exact* metrics an EC2 Auto Scaling
+target-tracking policy consumes; today they page a human, and the contract does not
+change when a policy replaces the human. Build the signal first, the fleet second —
+a fleet with no signal scales blind.
+
+### What scales, and what stays central
+
+Reviewed plane by plane: **Lambda** already scales horizontally (kept stateless,
+short-running, honestly timed out); **OpenClaw** tasks are independent, so a future
+worker fleet is a drop-in on the queue; **Ollama** is a single-node ceiling
+(distributed inference documented, **not** built); **Bedrock** is elastic by
+construction and doubles as the overflow valve when local saturates; **n8n** runs
+concurrently when workflows tolerate it. The **event bus, lifecycle authority, and
+S3 state** stay deliberately central — share-nothing workers are only simple because
+coordination and state live in exactly one place each.
+
+### Deliberately deferred
+
+No Auto Scaling group, no multi-worker OpenClaw deployment, no distributed Ollama, no
+n8n queue-mode workers, and no consumer for the queue — each is a drop-in *on top of*
+this seam and each is a later milestone. A queue standing ready with nothing draining
+it yet is the foundation, not a bug. Full component-by-component review, the
+Well-Architected mapping (Performance Efficiency + Reliability), and the deploy
+walkthrough are in **[SCALABILITY.md](SCALABILITY.md)**.
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -2005,8 +2081,10 @@ flowchart TB
 - **Outcome** — Compute at ~70% off, whose interruptions are visible (metrics per
   instance type), absorbed (work drained to S3 inside the two-minute window), and
   cheap. Capacity-optimised allocation across a *fleet* needs an Auto Scaling
-  group and is deliberately deferred to Milestone 16; the launch template this
-  milestone builds on is what makes that a drop-in change.
+  group, deferred to a later worker-fleet milestone;
+  [Milestone 16](#milestone-16--scalability) added the work queue and scaling signal
+  it drains, and the launch template this milestone builds on is what makes the ASG a
+  drop-in change.
 
 #### Milestone 4 — Custom AMIs
 
@@ -2275,11 +2353,25 @@ flowchart TB
 
 #### Milestone 16 — Scalability
 
+- **Status** — 🟡 **Shipped (partial, by design).** The horizontal-scaling seam in
+  [`infra/cloudformation/13-scalability.yaml`](infra/cloudformation/13-scalability.yaml)
+  — an SQS work queue + dead-letter queue, an EventBridge rule that load-levels
+  long-running task events into it, and the queue-depth/age/DLQ scaling alarms;
+  reference in [SCALABILITY.md](SCALABILITY.md); diagrams in
+  [scalability-diagrams.md](docs/architecture/scalability-diagrams.md); the
+  walkthrough is the blog post,
+  [Scaling an AI Agent Platform on AWS](docs/blog/scaling-an-ai-agent-platform-on-aws.md).
 - **Objective** — Establish how the platform grows, and where it stops.
-- **Primary focus** — Scaling each plane independently; queue depth as the
-  scaling signal; known limits.
-- **Related technologies** — Auto Scaling, queue-based load levelling.
-- **Expected outcome** — Documented scaling behaviour, and honest limits.
+- **Primary focus** — The one seam horizontal scaling requires (a queue that
+  decouples arrival from execution); queue depth as the scaling signal; scaling
+  each plane independently; known limits, stated honestly.
+- **Related technologies** — Amazon SQS, EventBridge, CloudWatch, EC2 (launch
+  template), Lambda, OpenClaw, Ollama, Amazon Bedrock, n8n, queue-based load
+  levelling.
+- **Outcome** — A durable work queue and the depth signal a future fleet scales
+  on — the seam built, the fleet deliberately not. Documented scaling behaviour per
+  plane, and honest limits: no Auto Scaling group, no multi-worker deploy, and no
+  distributed Ollama, each deferred on purpose as a drop-in on top of the seam.
 
 ### Phase 6 — Beyond
 

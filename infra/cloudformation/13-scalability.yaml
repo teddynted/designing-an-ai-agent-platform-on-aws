@@ -1,0 +1,303 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  AI Agent Platform — Horizontal scaling foundation (Milestone 16).
+  Until now the event backbone dispatched work synchronously: EventBridge invoked
+  a Lambda that did (or fronted) the work, and a burst of arrivals had nowhere to
+  wait. This stack adds the one seam a platform needs before it can scale
+  horizontally — a durable work queue between the event bus and the workers that
+  execute long-running AI tasks. Arrivals are buffered, not dropped or serialised;
+  a poison task lands in a dead-letter queue instead of blocking the line; and the
+  queue's depth becomes the single, honest signal a future worker fleet (multiple
+  OpenClaw agents, a scaled n8n, an EC2 Auto Scaling group) scales on. It builds
+  the seam and the signal. It deliberately does NOT build the fleet — that is a
+  later milestone. See SCALABILITY.md.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aiap
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Lower-case project prefix. Must match the other stacks.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment. Must match the other stacks.
+
+  TaskDetailType:
+    Type: String
+    Default: AgentTaskRequested
+    Description: >-
+      The EventBridge detail-type that marks an event as a unit of long-running
+      agent work to be queued. Only events with this detail-type (on the platform
+      bus) are load-levelled through the queue; every other platform event keeps
+      flowing to the existing synchronous dispatch rule in 05-events, untouched.
+
+  VisibilityTimeoutSeconds:
+    Type: Number
+    Default: 900
+    MinValue: 30
+    MaxValue: 43200
+    Description: >-
+      How long a task is hidden from other workers once one worker receives it —
+      i.e. the longest a single task may take to process. Set to 900s (15 min) to
+      match a long-running agent task, and never below a worker's true maximum:
+      too short and a slow task becomes visible again and is processed twice; too
+      long and a crashed worker's task waits that long before another can retry it.
+
+  MaxReceiveCount:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 1000
+    Description: >-
+      How many times a task may be received (and fail to be deleted) before it is
+      redriven to the dead-letter queue. This is what stops one poison task from
+      blocking the queue forever: after N honest retries it is set aside for a
+      human, and the healthy tasks behind it keep flowing.
+
+  BacklogAlarmThreshold:
+    Type: Number
+    Default: 100
+    MinValue: 1
+    Description: >-
+      Visible-message count above which the backlog alarm fires. This is the
+      scaling SIGNAL: sustained backlog means arrivals are outrunning worker
+      throughput, which is precisely when a future fleet would add a worker. Today
+      it pages a human; the metric is the same one an Auto Scaling target-tracking
+      policy would consume unchanged.
+
+  OldestMessageAgeAlarmSeconds:
+    Type: Number
+    Default: 900
+    MinValue: 30
+    Description: >-
+      Age (seconds) of the oldest un-consumed task above which the latency alarm
+      fires. Depth answers "how much is waiting"; age answers "how long has the
+      front of the line waited" — the one that catches a worker fleet that has
+      stalled entirely (nothing is being consumed) even when depth is modest.
+
+  AlarmTopicArn:
+    Type: String
+    Default: ""
+    Description: >-
+      SNS topic the scaling alarms notify. Intended to be the monitoring stack's
+      alarm topic (10-monitoring) — backlog is an operational signal, and reusing
+      that topic avoids a fourth near-duplicate. Empty leaves the alarms in place
+      and visible in the console but with no notification action, so the stack is
+      independent of whether monitoring is deployed.
+
+Conditions:
+  HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, ""]]
+
+Resources:
+  # ===========================================================================
+  # The dead-letter queue. A task that has been received MaxReceiveCount times
+  # without being deleted (a worker that keeps crashing on it, a malformed
+  # payload) is redriven here instead of cycling the main queue forever. It is a
+  # holding pen for human inspection, so it retains for the SQS maximum of 14
+  # days — the forensic record outlives the incident that produced it.
+  # ===========================================================================
+  AgentTaskDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-agent-tasks-dlq"
+      # SSE-SQS: server-side encryption with an AWS-managed key. No CMK to manage,
+      # no per-request KMS cost, and adequate for internal task metadata. A stack
+      # that needs a customer-managed key can swap this for KmsMasterKeyId later.
+      SqsManagedSseEnabled: true
+      MessageRetentionPeriod: 1209600
+
+  # ===========================================================================
+  # The work queue. This is the whole point of the milestone: a durable buffer
+  # between the event bus (bursty, instantaneous arrivals) and the workers
+  # (finite, slower throughput). It decouples the two — arrivals no longer wait
+  # on a worker being free, and workers no longer lose arrivals that came in
+  # while they were busy. It is also the seam that makes horizontal scaling a
+  # drop-in change: N workers polling one queue share the load with no
+  # coordination, because SQS hands each message to exactly one receiver.
+  # ===========================================================================
+  AgentTaskQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-agent-tasks"
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: !Ref VisibilityTimeoutSeconds
+      # Four days: a task that has waited this long is stale by any measure, and
+      # the backlog/age alarms would have fired long before. Long enough to
+      # survive a weekend outage of the workers, short enough not to replay
+      # ancient work when they return.
+      MessageRetentionPeriod: 345600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AgentTaskDeadLetterQueue.Arn
+        maxReceiveCount: !Ref MaxReceiveCount
+
+  # The queue policy grants exactly one principal — EventBridge — permission to
+  # send, and only from THIS platform's task rule (aws:SourceArn) in THIS account
+  # (aws:SourceAccount). Least privilege: nothing else in the account can enqueue
+  # work, and no other account's rule can push into our queue. Workers read with
+  # their own IAM identity (a future worker milestone attaches ReceiveMessage /
+  # DeleteMessage), so no consumer grant belongs here.
+  AgentTaskQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref AgentTaskQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgeToSend
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt AgentTaskQueue.Arn
+            Condition:
+              ArnEquals:
+                "aws:SourceArn": !GetAtt AgentTaskRule.Arn
+              StringEquals:
+                "aws:SourceAccount": !Ref "AWS::AccountId"
+
+  # ===========================================================================
+  # The rule that feeds the queue. It sits on the existing platform bus
+  # (05-events) and selects only long-running agent-task events by detail-type,
+  # routing them to SQS instead of to the synchronous dispatch Lambda. This is
+  # the event-driven decoupling in one resource: lightweight orchestration events
+  # stay on the fast synchronous path; heavy, long-running work is handed to a
+  # queue and picked up asynchronously by a worker that scales on its own clock.
+  # The bus is imported, not recreated, so this stack composes with 05-events
+  # rather than duplicating it.
+  # ===========================================================================
+  AgentTaskRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-agent-task-queue"
+      Description: Load-level long-running agent-task events through the work queue.
+      EventBusName:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EventBusName"
+      EventPattern:
+        source:
+          - !Sub "${ProjectName}.${Environment}.platform"
+        detail-type:
+          - !Ref TaskDetailType
+      State: ENABLED
+      Targets:
+        - Id: agent-task-queue
+          Arn: !GetAtt AgentTaskQueue.Arn
+          # No InputTransformer: the whole event is delivered so a worker has the
+          # full context. No SqsParameters: this is a standard (not FIFO) queue,
+          # traded ordering for unbounded throughput — agent tasks are
+          # independent, so strict ordering buys nothing and would cap the
+          # per-second rate a fleet could drain.
+
+  # ===========================================================================
+  # The scaling signals. These alarms are the milestone's real deliverable
+  # alongside the queue: a foundation is only a foundation if the thing built on
+  # it can see what it needs to. A future autoscaler reads exactly these metrics.
+  # Today they page a human; the contract does not change when a policy replaces
+  # the human.
+  # ===========================================================================
+
+  # Depth: arrivals are outrunning throughput. The classic scale-out trigger.
+  BacklogAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-agent-task-backlog"
+      AlarmDescription: >-
+        The agent-task backlog is sustained above threshold: work is arriving
+        faster than the workers drain it. This is the signal a worker fleet would
+        scale out on; until one exists, it is a prompt to add capacity by hand.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AgentTaskQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: !Ref BacklogAlarmThreshold
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref "AWS::NoValue"]
+      OKActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref "AWS::NoValue"]
+
+  # Age: the front of the line has waited too long. Catches a fully stalled
+  # fleet (nothing being consumed) even when depth alone looks unremarkable.
+  OldestMessageAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-agent-task-latency"
+      AlarmDescription: >-
+        The oldest queued task has waited beyond the latency budget. Depth says
+        how much is waiting; age says how long — and a rising age with modest
+        depth is the fingerprint of workers that have stopped consuming entirely.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AgentTaskQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: !Ref OldestMessageAgeAlarmSeconds
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref "AWS::NoValue"]
+      OKActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref "AWS::NoValue"]
+
+  # Any message in the DLQ is a task no worker could complete after every retry.
+  # It is never normal, so the threshold is zero: one is worth a look.
+  DeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-agent-task-dead-letters"
+      AlarmDescription: >-
+        A task was redriven to the dead-letter queue after exhausting its
+        retries — a poison payload or a bug a worker cannot get past. Inspect the
+        DLQ; nothing lands here in normal operation.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AgentTaskDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref "AWS::NoValue"]
+      OKActions:
+        - !If [HasAlarmTopic, !Ref AlarmTopicArn, !Ref "AWS::NoValue"]
+
+Outputs:
+  AgentTaskQueueUrl:
+    Description: URL of the work queue. A worker milestone polls this for tasks.
+    Value: !Ref AgentTaskQueue
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-AgentTaskQueueUrl"
+
+  AgentTaskQueueArn:
+    Description: ARN of the work queue. Grant a worker role ReceiveMessage/DeleteMessage on this.
+    Value: !GetAtt AgentTaskQueue.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-AgentTaskQueueArn"
+
+  AgentTaskQueueName:
+    Description: Name of the work queue (the SQS dimension the scaling alarms watch).
+    Value: !GetAtt AgentTaskQueue.QueueName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-AgentTaskQueueName"
+
+  AgentTaskDeadLetterQueueUrl:
+    Description: URL of the dead-letter queue holding tasks that exhausted their retries.
+    Value: !Ref AgentTaskDeadLetterQueue
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-AgentTaskDeadLetterQueueUrl"
