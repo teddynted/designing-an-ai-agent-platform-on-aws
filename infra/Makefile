@@ -51,11 +51,18 @@ TAGS        := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Mi
 SPOT_TAGS   := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=3
 # Monitoring & observability is Milestone 13.
 MON_TAGS    := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=13
+# Auditing & security monitoring is Milestone 14.
+SEC_TAGS    := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=14
 
 # Alarm notification email for the monitoring stack (10-monitoring). Empty deploys
 # the SNS topic with no subscription; set it to receive alarm emails (AWS sends a
 # confirmation you must click first).
 ALARM_EMAIL ?=
+
+# Email subscribed to the SECURITY alarm topic (11-security). A separate address
+# from ALARM_EMAIL by design: "someone used the root account" is a different page
+# than "the platform is unhealthy". Empty deploys the topic with no subscription.
+SECURITY_EMAIL ?=
 
 # Per-stack extra parameter overrides. Only the compute stack declares
 # PurchaseOption and InstanceType, so they must be passed to that stack alone —
@@ -86,6 +93,7 @@ STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observabilit
 .PHONY: spot deploy-spot delete-spot simulate-interruption
 .PHONY: webhook deploy-webhook delete-webhook
 .PHONY: monitoring deploy-monitoring delete-monitoring
+.PHONY: security deploy-security delete-security
 .PHONY: ami ami-list ami-prune deploy-ami drain-sync check-drain-sync startup-benchmark
 .PHONY: help lint validate deploy delete outputs bootstrap install-hooks import-storage
 
@@ -192,7 +200,7 @@ import-storage: ## Fix the storage stack alone (adopts an orphaned artifact buck
 # `make deploy`), but a stack you deployed is a stack you want the outputs of.
 # Undeployed ones simply print "(not deployed)".
 outputs: ## Print the outputs of every deployed stack
-	@for s in $(STACKS) 07-scheduler 08-spot 09-webhook 10-monitoring; do \
+	@for s in $(STACKS) 07-scheduler 08-spot 09-webhook 10-monitoring 11-security; do \
 		echo "== $(PROJECT)-$(ENV)-$$s =="; \
 		aws cloudformation describe-stacks --region $(REGION) \
 			--stack-name $(PROJECT)-$(ENV)-$$s \
@@ -410,6 +418,37 @@ deploy-monitoring: ## Deploy monitoring (resolves the instance from 03-compute; 
 delete-monitoring: ## Delete the monitoring & observability stack
 	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-10-monitoring
 	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-10-monitoring
+
+# --- Auditing & security monitoring (Milestone 14) --------------------------
+#
+# A multi-region CloudTrail (log-file validation, its own CMK) delivered to both
+# S3 and CloudWatch Logs, plus the CIS-style metric-filter alarms on root usage,
+# denied calls, MFA-less sign-in, and changes to IAM, security groups, and the
+# trail itself. Pure CloudFormation — no Go to build — so it needs nothing but
+# the AWS CLI. Independent of the compute stack: it audits the account, not one
+# instance, so there is nothing to resolve from another stack.
+#
+# The trail bucket and the trail's KMS key are Retain-on-delete: `delete-security`
+# removes the stack but the audit record and the key that decrypts it survive, by
+# design. Empty and delete them by hand only when you truly mean to.
+
+security: deploy-security ## Deploy the auditing & security monitoring stack (CloudTrail, KMS, alarms)
+
+deploy-security: ## Deploy security (SECURITY_EMAIL=you@example.com to be paged; INCLUDE_S3_DATA_EVENTS=true to log object access)
+	aws cloudformation deploy \
+		--stack-name $(PROJECT)-$(ENV)-11-security \
+		--template-file $(CFN_DIR)/11-security.yaml \
+		--region $(REGION) --capabilities $(CAPS) \
+		--parameter-overrides $(PARAMS) \
+			$(if $(SECURITY_EMAIL),SecurityEmail=$(SECURITY_EMAIL)) \
+			$(if $(INCLUDE_S3_DATA_EVENTS),IncludeS3DataEvents=$(INCLUDE_S3_DATA_EVENTS)) \
+		--tags $(SEC_TAGS)
+	@echo "security deployed. Confirm the SNS subscription in your inbox to receive alerts."
+	@echo "  Trail bucket + KMS key are Retain-on-delete; delete-security leaves the audit record intact."
+
+delete-security: ## Delete the security stack (the trail bucket and its KMS key are retained)
+	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-11-security
+	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-11-security
 
 # Rehearse an interruption without waiting for AWS to take the instance away.
 #

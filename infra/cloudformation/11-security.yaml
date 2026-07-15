@@ -1,0 +1,593 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  AI Agent Platform — Auditing & security monitoring (Milestone 14).
+  The account's black box recorder and its smoke detectors. A multi-region
+  CloudTrail with log-file validation records every API call to an encrypted,
+  locked-down S3 bucket AND streams it to CloudWatch Logs, where a set of
+  CIS-benchmark-style metric filters raise alarms on the events that matter to
+  security — root usage, denied calls, sign-in without MFA, failed logins, and
+  changes to IAM, security groups, and the trail itself. A customer-managed KMS
+  key encrypts the trail. Everything else in the platform was already
+  least-privilege and encrypted; this is the milestone that makes it *auditable*,
+  so a misconfiguration or a stolen credential leaves a trace and trips an alarm
+  rather than passing unseen.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aiap
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Lower-case project prefix. Must match the other stacks.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment. Must match the other stacks.
+
+  SecurityEmail:
+    Type: String
+    Default: ""
+    Description: >-
+      Email subscribed to the security SNS topic. Empty creates the topic with no
+      subscription. A real address receives an AWS confirmation that must be
+      clicked before anything is delivered. Security alerts are the one place a
+      human should be in the loop, so setting this is strongly recommended.
+
+  TrailLogRetentionDays:
+    Type: Number
+    Default: 365
+    AllowedValues: [30, 90, 180, 365, 400, 545, 731]
+    Description: >-
+      Retention for the CloudTrail CloudWatch Logs group, in days. A year by
+      default: audit logs are the one thing you want to still have when you find
+      out months later that you needed them. The S3 copy is retained separately
+      and longer (see the bucket lifecycle).
+
+  TrailS3RetentionDays:
+    Type: Number
+    Default: 730
+    MinValue: 30
+    Description: Days to keep raw trail files in S3 before expiring them. Two years by default.
+
+  IncludeS3DataEvents:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Also log S3 object-level (data) events for the artifact bucket. Off by
+      default because data events are billed per event and a busy bucket is
+      expensive; on, it answers "who read this object?" as well as "who changed
+      the bucket?". Management events (always on) are free for the first trail.
+
+  AlarmPeriodSeconds:
+    Type: Number
+    Default: 300
+    AllowedValues: [60, 300, 900]
+    Description: Evaluation period for the security alarms, in seconds.
+
+Conditions:
+  HasEmail: !Not [!Equals [!Ref SecurityEmail, ""]]
+  WithS3DataEvents: !Equals [!Ref IncludeS3DataEvents, "true"]
+
+Resources:
+  # ===========================================================================
+  # KMS — a customer-managed key for the trail.
+  #
+  # Why a CMK and not SSE-S3 here, when the artifact bucket uses SSE-S3? Because
+  # audit logs are the one dataset whose integrity IS the control. A CMK gives a
+  # key policy WE control (so we can say exactly who may decrypt the record of
+  # what everyone did) and a CloudTrail digest chain that log-file validation can
+  # verify. The ~$1/month is the cheapest tamper-evidence there is.
+  # ===========================================================================
+  TrailKey:
+    Type: AWS::KMS::Key
+    # Retained on stack delete, exactly like the bucket it encrypts. The trail
+    # bucket is Retain-on-delete so the audit record outlives the stack; a bucket
+    # full of KMS-encrypted log files whose key was scheduled for deletion is an
+    # unreadable bucket, so the key must share the bucket's fate.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub "Encrypts the ${ProjectName}-${Environment} CloudTrail."
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          # The account root administers the key. Without this, a key can become
+          # unmanageable — the one statement AWS requires on every CMK.
+          - Sid: AllowAccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          # CloudTrail may generate a data key to encrypt each log file, but ONLY
+          # for a trail belonging to this account — the EncryptionContext condition
+          # is what stops the key being used to encrypt some other account's trail
+          # and bill us for it.
+          - Sid: AllowCloudTrailEncrypt
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: kms:GenerateDataKey*
+            Resource: "*"
+            Condition:
+              StringLike:
+                "kms:EncryptionContext:aws:cloudtrail:arn": !Sub "arn:${AWS::Partition}:cloudtrail:*:${AWS::AccountId}:trail/*"
+          - Sid: AllowCloudTrailDescribeKey
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: kms:DescribeKey
+            Resource: "*"
+          # Anyone reading the trail (the console, a responder) must be able to
+          # decrypt it, but only from within this account.
+          - Sid: AllowAccountDecrypt
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action:
+              - kms:Decrypt
+              - kms:ReEncryptFrom
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "kms:CallerAccount": !Ref "AWS::AccountId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-trail-key"
+
+  TrailKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${ProjectName}-${Environment}-trail"
+      TargetKeyId: !Ref TrailKey
+
+  # ===========================================================================
+  # The trail bucket — where the immutable record lives.
+  #
+  # Same hardening as the artifact bucket (block public, TLS-only, versioned,
+  # lifecycle) plus the CloudTrail service grants. A separate bucket from the
+  # artifacts on purpose: the audit log must outlive, and be permissioned
+  # differently from, the data it audits.
+  # ===========================================================================
+  TrailBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-cloudtrail-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref TrailKey
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-trail-files
+            Status: Enabled
+            ExpirationInDays: !Ref TrailS3RetentionDays
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+          - Id: abort-incomplete-multipart-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-cloudtrail"
+
+  TrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TrailBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # CloudTrail checks the bucket ACL before it writes.
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt TrailBucket.Arn
+            Condition:
+              StringEquals:
+                "aws:SourceArn": !Sub "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${ProjectName}-${Environment}-trail"
+          # CloudTrail writes each log file. Scoped to this account's prefix, and
+          # required to hand ownership to the bucket owner. aws:SourceArn is the
+          # confused-deputy guard: only OUR trail may write here.
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${TrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                "s3:x-amz-acl": bucket-owner-full-control
+                "aws:SourceArn": !Sub "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${ProjectName}-${Environment}-trail"
+          # The same TLS-only floor the artifact bucket enforces.
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt TrailBucket.Arn
+              - !Sub "${TrailBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  # ===========================================================================
+  # CloudWatch Logs delivery — what makes the trail ALARMABLE.
+  #
+  # The S3 copy is the durable record; this stream is the live one the metric
+  # filters watch. Without it, CloudTrail is a flight recorder nobody reads until
+  # after the crash.
+  # ===========================================================================
+  TrailLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${ProjectName}/${Environment}/cloudtrail"
+      RetentionInDays: !Ref TrailLogRetentionDays
+
+  # The role CloudTrail assumes to write into that log group. Scoped to the one
+  # group's streams, and to CloudTrail as the only principal that may assume it.
+  TrailLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-cloudtrail-logs-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-trail-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteCloudTrailLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${TrailLogGroup.Arn}:*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-cloudtrail-logs-role"
+
+  # ===========================================================================
+  # The trail itself. Multi-region + global service events so nothing that
+  # happens in another region (or in IAM, which is global) is invisible.
+  # Log-file validation writes a signed digest chain, so a deleted or altered
+  # log file is detectable after the fact.
+  # ===========================================================================
+  Trail:
+    Type: AWS::CloudTrail::Trail
+    # The bucket policy and the log role must exist before the trail can validate
+    # its delivery targets, or creation fails with an opaque S3/permissions error.
+    DependsOn:
+      - TrailBucketPolicy
+    Properties:
+      TrailName: !Sub "${ProjectName}-${Environment}-trail"
+      S3BucketName: !Ref TrailBucket
+      KMSKeyId: !Ref TrailKey
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      EnableLogFileValidation: true
+      CloudWatchLogsLogGroupArn: !GetAtt TrailLogGroup.Arn
+      CloudWatchLogsRoleArn: !GetAtt TrailLogsRole.Arn
+      EventSelectors:
+        - !If
+          - WithS3DataEvents
+          - ReadWriteType: All
+            IncludeManagementEvents: true
+            DataResources:
+              - Type: AWS::S3::Object
+                Values:
+                  - !Sub
+                    - "${BucketArn}/"
+                    - BucketArn:
+                        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-ArtifactBucketArn"
+          - ReadWriteType: All
+            IncludeManagementEvents: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-trail"
+
+  # ===========================================================================
+  # Where security alarms go. Its own topic (not the monitoring stack's), because
+  # "the platform is unhealthy" and "someone used the root account" are different
+  # pages for, often, different people.
+  # ===========================================================================
+  SecurityTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-security-alarms"
+      DisplayName: !Sub "${ProjectName} ${Environment} security"
+
+  SecurityEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasEmail
+    Properties:
+      TopicArn: !Ref SecurityTopic
+      Protocol: email
+      Endpoint: !Ref SecurityEmail
+
+  # ===========================================================================
+  # Metric filters + alarms — the CIS-benchmark set, adapted.
+  #
+  # Each turns a class of security-relevant CloudTrail event into a metric, and
+  # alarms when it appears. These are the events you want to hear about within
+  # minutes, not discover in a quarterly review. They fire on a SINGLE occurrence
+  # (Threshold >= 1) because "someone used root once" is already the whole story.
+  # The namespace is scoped to this project and environment.
+  # ===========================================================================
+  UnauthorizedApiCallsFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref TrailLogGroup
+      FilterName: !Sub "${ProjectName}-${Environment}-unauthorized-api"
+      FilterPattern: '{ ($.errorCode = "*UnauthorizedOperation") || ($.errorCode = "AccessDenied*") }'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/security"
+          MetricName: UnauthorizedApiCalls
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  UnauthorizedApiCallsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-unauthorized-api-calls"
+      AlarmDescription: A caller is being denied — a probe, a misconfiguration, or a stolen credential testing its reach.
+      Namespace: !Sub "${ProjectName}/${Environment}/security"
+      MetricName: UnauthorizedApiCalls
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      # A little tolerance: the odd AccessDenied is background noise on any account.
+      # A burst is not.
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref SecurityTopic]
+      OKActions: [!Ref SecurityTopic]
+
+  RootAccountUsageFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref TrailLogGroup
+      FilterName: !Sub "${ProjectName}-${Environment}-root-usage"
+      # Root did something that was not an automated AWS service event. The root
+      # user should be used to set up the account and then never again.
+      FilterPattern: '{ $.userIdentity.type = "Root" && $.userIdentity.invokedBy NOT EXISTS && $.eventType != "AwsServiceEvent" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/security"
+          MetricName: RootAccountUsage
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  RootAccountUsageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-root-account-usage"
+      AlarmDescription: The root account was used. It should be locked away with hardware MFA and never used for operations.
+      Namespace: !Sub "${ProjectName}/${Environment}/security"
+      MetricName: RootAccountUsage
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref SecurityTopic]
+      OKActions: [!Ref SecurityTopic]
+
+  ConsoleNoMfaFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref TrailLogGroup
+      FilterName: !Sub "${ProjectName}-${Environment}-console-no-mfa"
+      # A console sign-in where MFA was not used. Excludes the SSO/SAML path,
+      # which reports MFA differently and is federated in.
+      FilterPattern: '{ ($.eventName = "ConsoleLogin") && ($.additionalEventData.MFAUsed != "Yes") && ($.userIdentity.type != "AssumedRole") }'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/security"
+          MetricName: ConsoleSignInWithoutMFA
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  ConsoleNoMfaAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-console-signin-without-mfa"
+      AlarmDescription: A user signed in to the console without MFA. Every human principal must have MFA enforced.
+      Namespace: !Sub "${ProjectName}/${Environment}/security"
+      MetricName: ConsoleSignInWithoutMFA
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref SecurityTopic]
+      OKActions: [!Ref SecurityTopic]
+
+  ConsoleAuthFailureFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref TrailLogGroup
+      FilterName: !Sub "${ProjectName}-${Environment}-console-auth-failure"
+      FilterPattern: '{ ($.eventName = "ConsoleLogin") && ($.errorMessage = "Failed authentication") }'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/security"
+          MetricName: ConsoleAuthFailures
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  ConsoleAuthFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-console-auth-failures"
+      AlarmDescription: Repeated failed console sign-ins — a password-guessing attempt against a human account.
+      Namespace: !Sub "${ProjectName}/${Environment}/security"
+      MetricName: ConsoleAuthFailures
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref SecurityTopic]
+      OKActions: [!Ref SecurityTopic]
+
+  IamChangesFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref TrailLogGroup
+      FilterName: !Sub "${ProjectName}-${Environment}-iam-changes"
+      # Any change to identity — a new policy, a new access key, an attachment.
+      # On a platform deployed only by CloudFormation over OIDC, an interactive
+      # IAM change is, by definition, out of band.
+      FilterPattern: >-
+        { ($.eventName = DeleteGroupPolicy) || ($.eventName = DeleteRolePolicy) || ($.eventName = DeleteUserPolicy) ||
+        ($.eventName = PutGroupPolicy) || ($.eventName = PutRolePolicy) || ($.eventName = PutUserPolicy) ||
+        ($.eventName = CreatePolicy) || ($.eventName = DeletePolicy) || ($.eventName = CreatePolicyVersion) ||
+        ($.eventName = DeletePolicyVersion) || ($.eventName = AttachRolePolicy) || ($.eventName = DetachRolePolicy) ||
+        ($.eventName = AttachUserPolicy) || ($.eventName = DetachUserPolicy) || ($.eventName = AttachGroupPolicy) ||
+        ($.eventName = DetachGroupPolicy) || ($.eventName = CreateAccessKey) || ($.eventName = CreateUser) ||
+        ($.eventName = CreateRole) }
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/security"
+          MetricName: IamChanges
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  IamChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-iam-changes"
+      AlarmDescription: IAM identities or policies changed. On a CloudFormation-only platform this should always be a deployment, never a person.
+      Namespace: !Sub "${ProjectName}/${Environment}/security"
+      MetricName: IamChanges
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref SecurityTopic]
+      OKActions: [!Ref SecurityTopic]
+
+  SecurityGroupChangesFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref TrailLogGroup
+      FilterName: !Sub "${ProjectName}-${Environment}-sg-changes"
+      FilterPattern: >-
+        { ($.eventName = AuthorizeSecurityGroupIngress) || ($.eventName = AuthorizeSecurityGroupEgress) ||
+        ($.eventName = RevokeSecurityGroupIngress) || ($.eventName = RevokeSecurityGroupEgress) ||
+        ($.eventName = CreateSecurityGroup) || ($.eventName = DeleteSecurityGroup) }
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/security"
+          MetricName: SecurityGroupChanges
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  SecurityGroupChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-security-group-changes"
+      AlarmDescription: A security group was changed. The platform's default-deny inbound posture is only as good as this staying quiet.
+      Namespace: !Sub "${ProjectName}/${Environment}/security"
+      MetricName: SecurityGroupChanges
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref SecurityTopic]
+      OKActions: [!Ref SecurityTopic]
+
+  TrailChangesFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref TrailLogGroup
+      FilterName: !Sub "${ProjectName}-${Environment}-trail-changes"
+      # Someone touched the audit trail itself. Disabling logging is the first
+      # move of anyone who does not want to be seen — so it is the loudest alarm.
+      FilterPattern: '{ ($.eventName = StopLogging) || ($.eventName = DeleteTrail) || ($.eventName = UpdateTrail) || ($.eventName = PutEventSelectors) }'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/security"
+          MetricName: CloudTrailChanges
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  TrailChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-cloudtrail-changes"
+      AlarmDescription: The audit trail was modified or stopped. Disabling logging is the first move of someone who does not want to be seen.
+      Namespace: !Sub "${ProjectName}/${Environment}/security"
+      MetricName: CloudTrailChanges
+      Statistic: Sum
+      Period: !Ref AlarmPeriodSeconds
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref SecurityTopic]
+      OKActions: [!Ref SecurityTopic]
+
+Outputs:
+  TrailArn:
+    Description: ARN of the CloudTrail.
+    Value: !GetAtt Trail.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-TrailArn"
+
+  TrailBucketName:
+    Description: Bucket holding the raw trail files.
+    Value: !Ref TrailBucket
+
+  TrailKeyArn:
+    Description: ARN of the customer-managed KMS key that encrypts the trail.
+    Value: !GetAtt TrailKey.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-TrailKeyArn"
+
+  SecurityTopicArn:
+    Description: SNS topic the security alarms publish to. Subscribe to receive alerts.
+    Value: !Ref SecurityTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-SecurityTopicArn"
+
+  SecurityMetricNamespace:
+    Description: The namespace the security metrics land in.
+    Value: !Sub "${ProjectName}/${Environment}/security"

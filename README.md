@@ -14,7 +14,8 @@
 [![Milestone 11](https://img.shields.io/badge/M11%20Loop%20Engineering-shipped-brightgreen)](docs/blog/building-autonomous-ai-agents-with-loop-engineering.md)
 [![Milestone 12](https://img.shields.io/badge/M12%20GitHub%20Webhooks-shipped-brightgreen)](docs/blog/automating-ai-workflows-with-github-webhooks.md)
 [![Milestone 13](https://img.shields.io/badge/M13%20Observability-shipped-brightgreen)](docs/blog/monitoring-an-ai-agent-platform-with-cloudwatch.md)
-[![Next milestone](https://img.shields.io/badge/next-M14%20Security-lightgrey)](#milestone-14--security)
+[![Milestone 14](https://img.shields.io/badge/M14%20Security-shipped-brightgreen)](docs/blog/securing-an-ai-agent-platform-on-aws.md)
+[![Next milestone](https://img.shields.io/badge/next-M15%20Cost%20Optimization-lightgrey)](#milestone-15--cost-optimization)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -39,8 +40,12 @@
 > verifies, filters and publishes to EventBridge without ever blocking on the work — and it is
 > now [observable through CloudWatch](OBSERVABILITY.md): one logging standard, EMF metrics,
 > dashboards, alarms and health probes, so the agent milestones that follow land already
-> visible. Everything from
-> [Milestone 14](#milestone-14--security) on is still a statement of intent. See [What exists today](#what-exists-today), which is
+> visible. And it is now [hardened around software that does what it is told](SECURITY.md):
+> the agent's egress is an allow-list rather than open, the account has a validated, encrypted
+> **CloudTrail** with alarms that page a human on root use or a tampered audit log, and prompt
+> injection is treated as the privilege-escalation problem it is — bounded by least privilege
+> and egress, not hoped away in a prompt. Everything from
+> [Milestone 15](#milestone-15--cost-optimization) on is still a statement of intent. See [What exists today](#what-exists-today), which is
 > kept honest.
 
 An open design study and reference implementation for running **autonomous AI
@@ -145,6 +150,7 @@ Being explicit, because everything else on this page is aspirational:
 | Loop engineering (autonomous agents) | ✅ **Implemented** | [Milestone 11](#milestone-11--loop-engineering): an explicit **loop controller** — a pure reducer — that drives a goal through plan → execute → evaluate → reflect → decide, with retries, reflection, always-enforced stopping conditions, and serialisable state for recovery. Reasoning delegates to the inference plane, execution to OpenClaw; the loop imports neither. See [LOOP.md](LOOP.md) |
 | GitHub webhook automation | ✅ **Implemented** | [Milestone 12](#milestone-12--github-webhook-automation): a Lambda behind a Function URL that **verifies** the HMAC signature (constant-time, over the raw body, before parsing), **filters** the event, and **publishes** a curated event to **EventBridge** — never calling n8n or a model directly, so GitHub's ten-second webhook can't be timed out into a double execution. Least-privilege IAM, the secret in Secrets Manager. See [WEBHOOKS.md](WEBHOOKS.md) |
 | Monitoring & observability | ✅ **Implemented** | [Milestone 13](#monitoring-and-observability-with-cloudwatch): one shared observability standard — structured logging with a **correlation ID that spans services**, secrets and repository content **redacted by the handler**, **EMF** metrics that cost nothing the logs did not, three CloudWatch **dashboards**, actionable **alarms** on an SNS path, liveness/readiness **health probes**, and **X-Ray** tracing that is honest about where it stops. A leaf library ([`internal/observability`](internal/observability)) anything can import, a CFN stack ([`10-monitoring.yaml`](infra/cloudformation/10-monitoring.yaml)), and the CloudWatch agent now shipping memory and disk. See [OBSERVABILITY.md](OBSERVABILITY.md) |
+| Security & auditing | ✅ **Implemented** | [Milestone 14](#milestone-14--security): prompt injection treated as a **privilege-escalation** problem, not a content-filtering one. The agent's egress becomes an **allow-list** (HTTPS/HTTP/DNS) with a free **S3 gateway endpoint**, so a compromised process can't open an arbitrary socket to exfiltrate over; a multi-region **CloudTrail** with **log-file validation**, its own **KMS key**, and dual delivery to S3 **and** CloudWatch Logs; and the **CIS-benchmark alarm set** — root usage, denied calls, MFA-less sign-in, IAM/SG/trail changes — paging a **separate** security SNS topic. A CFN stack ([`11-security.yaml`](infra/cloudformation/11-security.yaml)) plus egress hardening in `01-network` and an SSE-KMS option in `04-storage`. See [SECURITY.md](SECURITY.md) |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -1666,6 +1672,76 @@ make ami && make deploy-ami                    # pick up the agent's new memory/
 OBS_METRICS_NAMESPACE=aiap/app go run ./cmd/observe emit --dim Workflow=blog-generator
 ```
 
+## Milestone 14 — Security
+
+**Milestone 14.** The platform is hardened around the one thing that makes it
+different from an ordinary web service: its core workload is an agent that reads
+untrusted text and acts on it. This milestone does not try to stop the agent from
+being persuaded — it makes persuasion worthless.
+
+> 📄 [Securing an AI Agent Platform on AWS](docs/blog/securing-an-ai-agent-platform-on-aws.md) — the blog post ·
+> 🛠️ [SECURITY.md](SECURITY.md) — the reference
+
+### Prompt injection is a privilege-escalation problem
+
+"Ignore your task and run this" is a bug class, not a hypothetical, and no prompt
+engineering closes it completely. So the design treats every agent process as
+**already compromised** and asks a different question: when it is, what can it do?
+A hijacked process can only do what the process it hijacks is *allowed* to do — so
+the fix is not a better content filter, it is **least privilege, egress control,
+and auditability**. Scope the process to exactly what it needs, and a successful
+injection reaches nothing it could not already reach.
+
+### Egress becomes an allow-list
+
+Before this milestone the instance security group allowed all outbound traffic —
+open, with a note that the security milestone would tighten it. It now permits
+**HTTPS, HTTP (for the OS mirrors that still start on port 80), and DNS**, and
+nothing else. An agent talked into opening a reverse shell on port 4444, or into
+POSTing your repository to some arbitrary host, finds the socket refused. A free
+**S3 gateway endpoint** keeps bucket traffic on the AWS backbone, and is the
+prerequisite for the zero-egress hardening (interface endpoints) documented as a
+production step. Management stays outbound-only over SSM; the default-deny inbound
+posture is unchanged.
+
+### The account gets a black-box recorder
+
+A multi-region **CloudTrail** with **log-file validation** records every API call
+to a locked-down, KMS-encrypted S3 bucket **and** streams it to CloudWatch Logs,
+where the record becomes alarmable. The trail's customer-managed key and its
+bucket are both `Retain`-on-delete, because a bucket of encrypted logs whose key
+was destroyed is an unreadable bucket. The key policy carries an
+`EncryptionContext` confused-deputy guard so it can only ever encrypt *this*
+account's trail.
+
+### Smoke detectors on the events that matter
+
+A set of CIS-benchmark metric-filter alarms watch the live stream and page a
+**dedicated** security SNS topic — separate from the monitoring stack's, because
+"someone used the root account" is a different call than "the platform is
+unhealthy". Most fire on a single occurrence:
+
+- **Root account usage** — root should set up the account and then never be used.
+- **CloudTrail changes** — disabling logging is the first move of anyone who does
+  not want to be seen; the loudest alarm.
+- **IAM & security-group changes** — on a CloudFormation-over-OIDC platform, an
+  interactive change is by definition out of band.
+- **Console sign-in without MFA**, **repeated auth failures**, and **bursts of
+  denied API calls** — a stolen credential testing its reach.
+
+### Deploy it
+
+```bash
+cd infra
+make security SECURITY_EMAIL=you@example.com   # CloudTrail, its KMS key, log delivery, alarms
+# then confirm the SNS subscription in your inbox — nothing is delivered until you do
+```
+
+The egress hardening and the S3 endpoint ship with the network stack
+(`make deploy-01-network`); the SSE-KMS option for the artifact bucket is a
+parameter on the storage stack. Full reasoning, the threat model, and the
+production-hardening boundary are in **[SECURITY.md](SECURITY.md)**.
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -2087,12 +2163,21 @@ flowchart TB
 
 #### Milestone 14 — Security
 
+- **Status** — ✅ **Shipped.** Stack in
+  [`infra/cloudformation/11-security.yaml`](infra/cloudformation/11-security.yaml),
+  egress hardening + S3 endpoint in
+  [`01-network.yaml`](infra/cloudformation/01-network.yaml) and the SSE-KMS option in
+  [`04-storage.yaml`](infra/cloudformation/04-storage.yaml); reference in
+  [SECURITY.md](SECURITY.md); the walkthrough is the blog post,
+  [Securing an AI Agent Platform on AWS](docs/blog/securing-an-ai-agent-platform-on-aws.md).
 - **Objective** — Harden the boundary around software that does what it is told.
 - **Primary focus** — Prompt injection as a privilege-escalation problem; least
   privilege; egress control; secret handling.
-- **Related technologies** — IAM, AWS Secrets Manager, network policy.
-- **Expected outcome** — An agent that cannot reach what it does not need, however
-  it is persuaded.
+- **Related technologies** — IAM, AWS Secrets Manager, network policy, CloudTrail,
+  KMS, CloudWatch metric-filter alarms, SNS.
+- **Outcome** — An agent that cannot reach what it does not need, however it is
+  persuaded; and an account whose every API call is recorded to a validated,
+  encrypted trail, with alarms that page a human on root use or a tampered audit log.
 
 #### Milestone 15 — Cost Optimization
 
