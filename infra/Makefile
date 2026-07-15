@@ -40,6 +40,8 @@ SCHED_FUNCS   := start stop
 SCHED_PREFIX  := scheduler
 SPOT_FUNCS    := interruption statechange
 SPOT_PREFIX   := spot
+WEBHOOK_FUNCS := webhook
+WEBHOOK_PREFIX := webhook
 
 # Named IAM roles require this capability acknowledgement.
 CAPS        := CAPABILITY_NAMED_IAM
@@ -75,6 +77,7 @@ STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observabilit
 # ever running — `make deploy` would print "deployment complete" and do nothing.
 .PHONY: lambda-test lambda-vet package deploy-scheduler delete-scheduler
 .PHONY: spot deploy-spot delete-spot simulate-interruption
+.PHONY: webhook deploy-webhook delete-webhook
 .PHONY: ami ami-list ami-prune deploy-ami drain-sync check-drain-sync startup-benchmark
 .PHONY: help lint validate deploy delete outputs bootstrap install-hooks import-storage
 
@@ -181,7 +184,7 @@ import-storage: ## Fix the storage stack alone (adopts an orphaned artifact buck
 # `make deploy`), but a stack you deployed is a stack you want the outputs of.
 # Undeployed ones simply print "(not deployed)".
 outputs: ## Print the outputs of every deployed stack
-	@for s in $(STACKS) 07-scheduler 08-spot; do \
+	@for s in $(STACKS) 07-scheduler 08-spot 09-webhook; do \
 		echo "== $(PROJECT)-$(ENV)-$$s =="; \
 		aws cloudformation describe-stacks --region $(REGION) \
 			--stack-name $(PROJECT)-$(ENV)-$$s \
@@ -207,7 +210,7 @@ $(shell aws cloudformation describe-stacks --stack-name $(PROJECT)-$(ENV)-04-sto
 	--output text 2>/dev/null)
 endef
 
-package: ## Build all four Go Lambdas (arm64) and upload their zips to the artifact bucket
+package: ## Build every Go Lambda (arm64) and upload their zips to the artifact bucket
 	@bucket="$(strip $(call artifact_bucket))"; \
 	[ -n "$$bucket" ] || { echo "artifact bucket not found — deploy 04-storage first"; exit 1; }; \
 	build_upload() { \
@@ -218,8 +221,9 @@ package: ## Build all four Go Lambdas (arm64) and upload their zips to the artif
 		aws s3 cp /tmp/$$fn.zip s3://$$bucket/$$prefix/$$fn.zip --region $(REGION); \
 	}; \
 	echo "packaging to s3://$$bucket/"; \
-	for f in $(SCHED_FUNCS); do build_upload $(SCHED_PREFIX) $$f || exit 1; done; \
-	for f in $(SPOT_FUNCS);  do build_upload $(SPOT_PREFIX)  $$f || exit 1; done; \
+	for f in $(SCHED_FUNCS);   do build_upload $(SCHED_PREFIX)   $$f || exit 1; done; \
+	for f in $(SPOT_FUNCS);    do build_upload $(SPOT_PREFIX)    $$f || exit 1; done; \
+	for f in $(WEBHOOK_FUNCS); do build_upload $(WEBHOOK_PREFIX) $$f || exit 1; done; \
 	echo "packaged"
 
 deploy-scheduler: ## Deploy the instance scheduler (needs INSTANCE_ID=i-...; run `package` first)
@@ -328,6 +332,38 @@ deploy-spot: ## Deploy Spot interruption handling (run `package` first, or use `
 delete-spot: ## Delete the Spot interruption handling stack
 	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-08-spot
 	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-08-spot
+
+# --- GitHub webhook automation (Milestone 12) -------------------------------
+#
+# The webhook Lambda needs the event bus (05-events) and the artifact bucket
+# (04-storage). n8n routing is optional: pass N8N_WEBHOOK_URL (and N8N_API_KEY)
+# to create the EventBridge rule + API destination, or leave them unset and the
+# events simply land on the bus for a consumer added later.
+
+N8N_WEBHOOK_URL ?=
+N8N_API_KEY     ?=
+
+webhook: package deploy-webhook ## Build the webhook Lambda and deploy the webhook stack
+
+deploy-webhook: ## Deploy the GitHub webhook stack (run `package` first, or use `make webhook`)
+	@bucket="$(strip $(call artifact_bucket))"; \
+	[ -n "$$bucket" ] || { echo "artifact bucket not found — deploy 04-storage first"; exit 1; }; \
+	aws cloudformation deploy \
+		--stack-name $(PROJECT)-$(ENV)-09-webhook \
+		--template-file $(CFN_DIR)/09-webhook.yaml \
+		--region $(REGION) --capabilities $(CAPS) \
+		--parameter-overrides $(PARAMS) LambdaCodeBucket=$$bucket \
+			WebhookCodeKey=$(WEBHOOK_PREFIX)/webhook.zip \
+			$(if $(N8N_WEBHOOK_URL),N8nWebhookUrl=$(N8N_WEBHOOK_URL)) \
+			$(if $(N8N_API_KEY),N8nAuthApiKey=$(N8N_API_KEY)) \
+		--tags $(TAGS)
+	@echo "webhook deployed. Configure GitHub with:"
+	@echo "  URL:    $$(aws cloudformation describe-stacks --region $(REGION) --stack-name $(PROJECT)-$(ENV)-09-webhook --query \"Stacks[0].Outputs[?OutputKey=='WebhookUrl'].OutputValue\" --output text 2>/dev/null)"
+	@echo "  Secret: aws secretsmanager get-secret-value --secret-id $(PROJECT)-$(ENV)-github-webhook-secret --query SecretString --output text"
+
+delete-webhook: ## Delete the GitHub webhook stack
+	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-09-webhook
+	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-09-webhook
 
 # Rehearse an interruption without waiting for AWS to take the instance away.
 #

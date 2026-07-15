@@ -106,7 +106,7 @@ jobs:
         run: |
           go vet ./...
           go test ./...
-          for fn in start stop interruption statechange; do
+          for fn in start stop interruption statechange webhook; do
             GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "/tmp/$fn" "./cmd/$fn"
           done
 

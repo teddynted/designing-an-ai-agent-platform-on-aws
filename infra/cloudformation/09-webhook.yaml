@@ -1,0 +1,382 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  AI Agent Platform — GitHub Webhook Automation (Milestone 12).
+  A Go Lambda behind a Function URL receives GitHub webhooks, verifies the HMAC
+  signature, filters the event, and publishes a small curated event onto the
+  platform's EventBridge bus. An optional EventBridge rule + API destination
+  routes those events to n8n. The Lambda calls no AI service and starts no
+  workflow — it puts a durable event on the bus and returns, so a slow workflow
+  can never make GitHub's ten-second webhook time out and retry.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aiap
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Lower-case project prefix. Must match the other stacks.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment. Must match the other stacks.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
+    Description: Retention for the Lambda's log group, in days.
+
+  LambdaCodeBucket:
+    Type: String
+    Description: >-
+      S3 bucket holding the packaged Lambda zip. Populated by
+      `make -C infra package`. Defaults to the storage stack's artifact bucket.
+
+  WebhookCodeKey:
+    Type: String
+    Default: webhook/webhook.zip
+    Description: S3 key of the webhook Lambda's zip.
+
+  LambdaTimeoutSeconds:
+    Type: Number
+    Default: 10
+    MinValue: 3
+    MaxValue: 30
+    Description: >-
+      Lambda timeout. The handler verifies, filters, and does one EventBridge
+      PutEvents — it should answer in well under a second. GitHub itself gives a
+      webhook ~10s, so there is no reason for this to be larger.
+
+  # --- filtering policy (all optional; safe defaults) ------------------------
+  SupportedEvents:
+    Type: String
+    Default: ""
+    Description: >-
+      Comma-separated event types to accept (e.g. "push,release"). Empty means
+      every supported event. It can only narrow the built-in set.
+
+  RepoAllowList:
+    Type: String
+    Default: ""
+    Description: >-
+      Comma-separated "owner/repo" allow-list. Empty means any repository.
+
+  BranchAllowList:
+    Type: String
+    Default: ""
+    Description: >-
+      Comma-separated branch filters (e.g. "main,release/*"). Empty means any
+      branch. A trailing "/*" is a prefix match.
+
+  IgnoreForks:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Drop events from forked repositories. On by default (an agent on a fork reads attacker-controlled content).
+
+  IgnoreArchived:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Drop events from archived repositories. On by default.
+
+  IgnoreBranchDeletes:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Drop branch/tag deletions. On by default (nothing to check out, rarely worth a workflow).
+
+  # --- optional n8n routing --------------------------------------------------
+  N8nWebhookUrl:
+    Type: String
+    Default: ""
+    Description: >-
+      n8n webhook URL to route GitHub events to. Empty leaves the events on the
+      bus for other consumers (n8n is deployed by its own repository, so this is
+      optional here). When set, an EventBridge rule + API destination is created.
+
+  N8nAuthHeaderName:
+    Type: String
+    Default: "X-Webhook-Token"
+    Description: Header n8n authenticates the incoming call with.
+
+  N8nAuthApiKey:
+    Type: String
+    Default: "REPLACE_ME"
+    NoEcho: true
+    Description: >-
+      Value for the n8n auth header. Stored by EventBridge in a managed secret;
+      never appears in the events. Override it when N8nWebhookUrl is set — the
+      placeholder default deploys a connection that n8n will (correctly) reject,
+      which is louder than a silent empty credential.
+
+Conditions:
+  # n8n routing is created only when a URL is supplied. Without it the webhook
+  # still works end to end — events land on the bus — there is simply no rule
+  # forwarding them yet. This keeps the stack deployable before n8n exists.
+  HasN8n: !Not [!Equals [!Ref N8nWebhookUrl, ""]]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # The shared webhook secret. GitHub signs each delivery with it; the Lambda
+  # verifies against it. CloudFormation generates a random value — copy it into
+  # the repository's webhook settings in GitHub:
+  #   aws secretsmanager get-secret-value \
+  #     --secret-id aiap-<env>-github-webhook-secret --query SecretString --output text
+  # It lives in Secrets Manager, not a Lambda env var, so it sits behind its own
+  # narrow permission rather than being readable by anyone who can read the
+  # function's configuration.
+  # ---------------------------------------------------------------------------
+  WebhookSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-github-webhook-secret"
+      Description: Shared secret GitHub signs webhook deliveries with.
+      GenerateSecretString:
+        # A plain high-entropy string (not JSON), which is what the handler reads,
+        # and what GitHub's "Secret" field expects.
+        PasswordLength: 40
+        ExcludePunctuation: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-github-webhook-secret"
+
+  # ---------------------------------------------------------------------------
+  # Lambda execution role — least privilege: publish to the platform bus, read
+  # the one secret, decrypt it, write its own log group. Nothing else.
+  # ---------------------------------------------------------------------------
+  WebhookRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-webhook-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: publish-events
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # PutEvents scoped to the ONE platform bus. A webhook that could
+              # publish to any bus is a webhook that could inject events anywhere.
+              - Sid: PutPlatformEvents
+                Effect: Allow
+                Action: events:PutEvents
+                Resource:
+                  Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EventBusArn"
+        - PolicyName: read-secret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadWebhookSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref WebhookSecret
+              - Sid: DecryptWebhookSecret
+                Effect: Allow
+                Action: kms:Decrypt
+                # The AWS-managed Secrets Manager key. Scoped by ViaService so this
+                # grant only works when decrypting through Secrets Manager, not for
+                # arbitrary KMS use.
+                Resource: !Sub "arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub "secretsmanager.${AWS::Region}.amazonaws.com"
+        - PolicyName: logging
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-webhook:*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-webhook-lambda-role"
+
+  WebhookFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-webhook"
+      RetentionInDays: !Ref LogRetentionDays
+
+  WebhookFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: WebhookFunctionLogGroup
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-webhook"
+      Description: Verifies GitHub webhooks and publishes curated events to EventBridge.
+      Runtime: provided.al2023
+      Architectures: [arm64]
+      Handler: bootstrap
+      Timeout: !Ref LambdaTimeoutSeconds
+      MemorySize: 128
+      Role: !GetAtt WebhookRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref WebhookCodeKey
+      Environment:
+        Variables:
+          PROJECT_NAME: !Ref ProjectName
+          ENVIRONMENT: !Ref Environment
+          EVENT_BUS_NAME:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EventBusName"
+          # The source the platform bus's rule filters on. It is the platform's
+          # own namespace, not GitHub's — a consumer routes on this, not on
+          # anything GitHub sent.
+          EVENT_SOURCE: !Sub "${ProjectName}.${Environment}.github"
+          WEBHOOK_SECRET_ARN: !Ref WebhookSecret
+          SUPPORTED_EVENTS: !Ref SupportedEvents
+          REPO_ALLOW_LIST: !Ref RepoAllowList
+          BRANCH_ALLOW_LIST: !Ref BranchAllowList
+          IGNORE_FORKS: !Ref IgnoreForks
+          IGNORE_ARCHIVED: !Ref IgnoreArchived
+          IGNORE_BRANCH_DELETES: !Ref IgnoreBranchDeletes
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-webhook"
+
+  # A Function URL is the whole HTTP entry point — HTTPS, no API Gateway.
+  # AuthType NONE means "no AWS/IAM auth", which is correct: GitHub cannot sign
+  # with SigV4, and the real authentication is the HMAC signature the handler
+  # verifies. The URL is public; the body's signature is the gate.
+  WebhookFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt WebhookFunction.Arn
+      AuthType: NONE
+
+  # The public Function URL needs an explicit permission for unauthenticated
+  # invocation. This is the one place "*" principal is correct — it is what makes
+  # the URL callable by GitHub at all — and it is scoped to InvokeFunctionUrl with
+  # AuthType NONE, not to arbitrary invocation.
+  WebhookUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WebhookFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  # A basic health alarm: the Lambda erroring means authentic, wanted events are
+  # failing to publish (the only thing that returns a 5xx). Deeper dashboards are
+  # Milestone 15; this is the one alarm that should exist from day one.
+  WebhookErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-webhook-errors"
+      AlarmDescription: The webhook Lambda is failing to publish events.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref WebhookFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  # ---------------------------------------------------------------------------
+  # Optional: route GitHub events from the bus to n8n via an API destination.
+  # Created only when N8nWebhookUrl is set (Condition HasN8n).
+  # ---------------------------------------------------------------------------
+  N8nConnection:
+    Type: AWS::Events::Connection
+    Condition: HasN8n
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-n8n"
+      Description: Auth for calling the n8n webhook from EventBridge.
+      AuthorizationType: API_KEY
+      AuthParameters:
+        ApiKeyAuthParameters:
+          ApiKeyName: !Ref N8nAuthHeaderName
+          ApiKeyValue: !Ref N8nAuthApiKey
+
+  N8nApiDestination:
+    Type: AWS::Events::ApiDestination
+    Condition: HasN8n
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-n8n"
+      Description: The n8n webhook that receives GitHub events.
+      ConnectionArn: !GetAtt N8nConnection.Arn
+      HttpMethod: POST
+      InvocationEndpoint: !Ref N8nWebhookUrl
+      # Bound the call rate to n8n, so a burst of pushes cannot stampede it.
+      InvocationRateLimitPerSecond: 10
+
+  # The rule's role: EventBridge assumes it to call the API destination. Scoped
+  # to invoking this one destination and nothing else.
+  EventRuleRole:
+    Type: AWS::IAM::Role
+    Condition: HasN8n
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-webhook-rule-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-n8n
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeApiDestination
+                Effect: Allow
+                Action: events:InvokeApiDestination
+                Resource: !GetAtt N8nApiDestination.Arn
+
+  GitHubEventRule:
+    Type: AWS::Events::Rule
+    Condition: HasN8n
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-github-to-n8n"
+      Description: Route curated GitHub events to n8n.
+      EventBusName:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EventBusName"
+      EventPattern:
+        source:
+          - !Sub "${ProjectName}.${Environment}.github"
+        detail-type:
+          - "GitHub Event"
+      State: ENABLED
+      Targets:
+        - Id: n8n
+          Arn: !GetAtt N8nApiDestination.Arn
+          RoleArn: !GetAtt EventRuleRole.Arn
+          # A dead-letter queue and richer retries are Milestone-future; the
+          # default EventBridge retry (24h, 185 attempts) already prevents a
+          # transient n8n blip from dropping an event.
+          RetryPolicy:
+            MaximumRetryAttempts: 10
+            MaximumEventAgeInSeconds: 3600
+
+Outputs:
+  WebhookUrl:
+    Description: >-
+      The HTTPS endpoint to paste into GitHub's webhook "Payload URL". Set the
+      content type to application/json and the secret to the generated secret.
+    Value: !GetAtt WebhookFunctionUrl.FunctionUrl
+
+  WebhookSecretArn:
+    Description: ARN of the shared webhook secret. Read its value to configure GitHub.
+    Value: !Ref WebhookSecret
+
+  WebhookFunctionArn:
+    Description: ARN of the webhook Lambda.
+    Value: !GetAtt WebhookFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-WebhookFunctionArn"
