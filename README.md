@@ -17,7 +17,8 @@
 [![Milestone 14](https://img.shields.io/badge/M14%20Security-shipped-brightgreen)](docs/blog/securing-an-ai-agent-platform-on-aws.md)
 [![Milestone 15](https://img.shields.io/badge/M15%20Cost%20Optimization-shipped-brightgreen)](docs/blog/cost-optimization-strategies-for-ai-platforms-on-aws.md)
 [![Milestone 16](https://img.shields.io/badge/M16%20Scalability-shipped-brightgreen)](docs/blog/scaling-an-ai-agent-platform-on-aws.md)
-[![Next milestone](https://img.shields.io/badge/next-M17%20Future%20Extensions-lightgrey)](#milestone-17--future-extensions)
+[![Milestone 17](https://img.shields.io/badge/M17%20Future%20Extensions-architecture-blue)](docs/blog/extending-an-ai-agent-platform-with-new-ai-providers-and-services.md)
+[![Next milestone](https://img.shields.io/badge/next-MCP%20Integration-lightgrey)](#model-context-protocol-mcp-integration)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -56,8 +57,15 @@
 > depth instead of dropped or throttled, a poison task lands in a dead-letter queue rather than
 > blocking the line, and that queue's depth is the exact signal a future worker fleet scales on —
 > the seam that makes horizontal scaling a drop-in, built without yet building the fleet.
-> Everything from
-> [Milestone 17](#milestone-17--future-extensions) on is still a statement of intent. See [What exists today](#what-exists-today), which is
+> And it now has a written, **test-enforced [extension model](EXTENSIBILITY.md)**: because the
+> arrow points *inward* — a core owns each interface, a vendor client implements it, one factory
+> knows the catalogue, and [`architecture_test.go`](internal/architecture_test.go) fails the build
+> if that ever stops holding — adding a new LLM provider, an MCP server, or a vector database is a
+> new file and one factory line, not a refactor of the router, the loop, or any caller. That last
+> milestone ships the *architecture*, not the integrations: the concrete extensions it makes cheap
+> (**MCP**, **vector databases**, further providers) are still ahead, and everything from
+> [MCP Integration](#model-context-protocol-mcp-integration) on is still a statement of intent.
+> See [What exists today](#what-exists-today), which is
 > kept honest.
 
 An open design study and reference implementation for running **autonomous AI
@@ -165,6 +173,7 @@ Being explicit, because everything else on this page is aspirational:
 | Security & auditing | ✅ **Implemented** | [Milestone 14](#milestone-14--security): prompt injection treated as a **privilege-escalation** problem, not a content-filtering one. The agent's egress becomes an **allow-list** (HTTPS/HTTP/DNS) with a free **S3 gateway endpoint**, so a compromised process can't open an arbitrary socket to exfiltrate over; a multi-region **CloudTrail** with **log-file validation**, its own **KMS key**, and dual delivery to S3 **and** CloudWatch Logs; and the **CIS-benchmark alarm set** — root usage, denied calls, MFA-less sign-in, IAM/SG/trail changes — paging a **separate** security SNS topic. A CFN stack ([`11-security.yaml`](infra/cloudformation/11-security.yaml)) plus egress hardening in `01-network` and an SSE-KMS option in `04-storage`. See [SECURITY.md](SECURITY.md) |
 | Cost optimization | ✅ **Implemented** | [Milestone 15](#milestone-15--cost-optimization): the cost decisions were mostly made right upstream (**Spot**, a **scheduler**, a **2.5s-boot AMI** so stopping the box is free to undo, **local-first routing**, **arm64** everything, and **no NAT gateway** — ~\$32/mo designed out). This milestone adds the **FinOps guardrails** that keep it there — an **AWS Budget** with a forecasted-breach alert, per-service **Cost Anomaly Detection**, and a billing alarm, on their own SNS topic ([`12-cost.yaml`](infra/cloudformation/12-cost.yaml)) — plus two honest tunings (arm64 for the last x86 Lambda, S3 Intelligent-Tiering) and a full cost model. See [COST.md](COST.md) |
 | Scalability foundation | 🟡 **Partial (by design)** | [Milestone 16](#milestone-16--scalability): the one seam you need before horizontal scaling — a durable **SQS work queue** between the event bus and the workers that run long-running agent tasks, so a burst is **absorbed as queue depth** rather than dropped or throttled, arrival is **decoupled** from execution, and *N* workers can later share the load with no coordination. A **dead-letter queue** isolates poison tasks; **queue-depth/age alarms** are the exact signal a future fleet scales on ([`13-scalability.yaml`](infra/cloudformation/13-scalability.yaml)). It builds the **seam and the signal**, not the fleet — no Auto Scaling group, no multi-worker deploy, no distributed Ollama, all deferred on purpose. See [SCALABILITY.md](SCALABILITY.md) |
+| Extension model (extensibility) | 📐 **Architecture (design shipped)** | [Milestone 17](#milestone-17--future-extensions): the platform is extensible because the **arrow points inward** — a core owns each interface, a vendor client implements it, one leaf factory ([`internal/providers`](internal/providers)) knows the catalogue, and [`architecture_test.go`](internal/architecture_test.go) **fails the build** if a core ever learns its vendor's name. So a new **LLM provider**, an **MCP server**, or a **vector database** is a new client + one factory line — the router, loop, service, and every caller untouched. This milestone ships the **recipe and the map**, not the integrations: no MCP, no vector store, no third provider, **no infrastructure** — architecture only. See [EXTENSIBILITY.md](EXTENSIBILITY.md) |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -1890,6 +1899,63 @@ it yet is the foundation, not a bug. Full component-by-component review, the
 Well-Architected mapping (Performance Efficiency + Reliability), and the deploy
 walkthrough are in **[SCALABILITY.md](SCALABILITY.md)**.
 
+## Milestone 17 — Future Extensions
+
+**Milestone 17.** The platform's extension model, written down and proven — an
+**architecture-only** milestone that ships no infrastructure and no new runnable code,
+because the extensibility work was already done, one integration at a time, and the
+remaining job is to name it precisely enough that adding one is a recipe.
+
+> 📄 [Extending an AI Agent Platform with New AI Providers and Services](docs/blog/extending-an-ai-agent-platform-with-new-ai-providers-and-services.md) — the blog post ·
+> 📐 [Extensibility diagrams](docs/architecture/extensibility-diagrams.md) ·
+> 🛠️ [EXTENSIBILITY.md](EXTENSIBILITY.md) — the reference
+
+### The arrow points inward
+
+Every integration in this platform is two packages: a **core** that owns the
+platform's side of a boundary (its types, its errors, its interface) and a **client**
+that implements it against one vendor. The dependency points *inward* — the client
+imports the core, the core never imports the client — so the platform's own vocabulary
+knows nothing about any specific vendor, and exactly one leaf factory
+([`internal/providers`](internal/providers)) is allowed to know that more than one
+vendor exists. A new provider, tool, or store is a new implementation of an existing
+interface plus one line in that factory.
+
+### It is enforced, not merely intended
+
+This is not an aspiration a document asserts; it is a set of build-failing tests in
+[`internal/architecture_test.go`](internal/architecture_test.go). The router routes
+between a `map[string]llm.Provider` and contains the strings `"ollama"` and
+`"bedrock"` *only inside comments* — `TestTheRouterDoesNotKnowWhichProvidersExist`
+fails the build if that stops being true. So *"add a provider without changing the
+routing layer"* is a property the compiler defends, which is the whole return on the
+abstraction the platform built at Milestone 7, before there was a second provider to
+route.
+
+### The recipe, and the extensions it makes cheap
+
+Adding an **LLM provider** (Amazon Nova, Mistral, an OpenAI-compatible endpoint) is
+three steps: implement `llm.Provider` (five methods), add one `case` to the factory,
+and stop — the router discovers what the provider can do by asking `Capabilities()`,
+never by switching on its name. **MCP** lands on the existing `llm.ToolRunner` seam —
+as a client adapting external MCP tools, and as a server exposing the platform's own —
+preserving the `Write`/read classification the loop uses to decide what is safe to
+retry. A **vector database** is a proposed `memory.Store` core with vendor clients
+behind it, with the key design commitment that *embedding is inference* (an
+`llm.Provider` job) so "which model embeds" and "where vectors live" stay two
+independent extension points.
+
+### What ships, and what deliberately does not
+
+This milestone ships the **architecture**: the reference, the recipe, the diagrams,
+and the named extension points — proven by the four real integrations already behind
+these seams, not by a toy fifth one. It ships **no** MCP implementation, **no** vector
+store, **no** third provider, and **no** CloudFormation stack or Makefile target —
+those exist for milestones that deploy infrastructure, and this one deploys nothing, by
+design. The concrete integrations the architecture makes cheap are each their own
+future milestone. The full recipe, the extension map, and the list of things that must
+*never* become extension points are in **[EXTENSIBILITY.md](EXTENSIBILITY.md)**.
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -2377,11 +2443,26 @@ flowchart TB
 
 #### Milestone 17 — Future Extensions
 
+- **Status** — 📐 **Shipped (architecture only).** The platform's extension model,
+  documented and grounded in the seams already enforced by
+  [`internal/architecture_test.go`](internal/architecture_test.go): reference in
+  [EXTENSIBILITY.md](EXTENSIBILITY.md); diagrams in
+  [extensibility-diagrams.md](docs/architecture/extensibility-diagrams.md); the
+  walkthrough is the blog post,
+  [Extending an AI Agent Platform with New AI Providers and Services](docs/blog/extending-an-ai-agent-platform-with-new-ai-providers-and-services.md).
+  No new infrastructure or runnable code — by design, this milestone ships the
+  architecture, not the integrations.
 - **Objective** — Extend the platform beyond its original workloads.
-- **Primary focus** — Additional agents, additional providers, and multi-tenancy.
-- **Related technologies** — To be determined by what the earlier milestones
-  teach.
-- **Expected outcome** — A platform other people can build agents on.
+- **Primary focus** — The extension model itself (a core interface + a vendor client +
+  one factory line, guarded by a test); how new **LLM providers**, **MCP servers**, and
+  **vector databases** plug into existing seams; and what must *never* become an
+  extension point.
+- **Related technologies** — The provider abstraction layer (`llm.Provider`), MCP,
+  vector databases, `llm.ToolRunner`, future LLM providers.
+- **Outcome** — A written, test-enforced recipe for extension that makes a new
+  provider, an MCP integration, or a vector store a new file and one factory line
+  rather than a refactor — the map and the recipe, with the concrete integrations (MCP,
+  vector DBs, multi-tenancy) deferred to their own future milestones.
 
 #### Model Context Protocol (MCP) Integration
 
