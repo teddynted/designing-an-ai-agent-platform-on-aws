@@ -127,12 +127,12 @@ Resources:
           FromPort: 443
           ToPort: 443
           CidrIp: 0.0.0.0/0
-          Description: HTTPS — AWS APIs (SSM, CloudWatch, S3, Bedrock), Git, model endpoints, package mirrors.
+          Description: HTTPS - AWS APIs (SSM, CloudWatch, S3, Bedrock), Git, model endpoints, package mirrors.
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
-          Description: HTTP — OS package mirrors that redirect through port 80 before upgrading to TLS.
+          Description: HTTP - OS package mirrors that redirect through port 80 before upgrading to TLS.
         - IpProtocol: udp
           FromPort: 53
           ToPort: 53
