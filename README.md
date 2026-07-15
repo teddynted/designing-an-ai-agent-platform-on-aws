@@ -11,7 +11,8 @@
 [![Milestone 8](https://img.shields.io/badge/M8%20Bedrock-shipped-brightgreen)](docs/blog/adding-amazon-bedrock-to-an-ai-agent-platform.md)
 [![Milestone 9](https://img.shields.io/badge/M9%20Claude-shipped-brightgreen)](docs/blog/integrating-claude-into-an-ai-agent-platform.md)
 [![Milestone 10](https://img.shields.io/badge/M10%20Hybrid%20Routing-shipped-brightgreen)](docs/blog/building-hybrid-ai-workflows-with-ollama-and-amazon-bedrock.md)
-[![Next milestone](https://img.shields.io/badge/next-M11%20Loop%20Engineering-lightgrey)](#milestone-11--loop-engineering)
+[![Milestone 11](https://img.shields.io/badge/M11%20Loop%20Engineering-shipped-brightgreen)](docs/blog/building-autonomous-ai-agents-with-loop-engineering.md)
+[![Next milestone](https://img.shields.io/badge/next-M12%20Webhook%20Automation-lightgrey)](#milestone-12--github-webhook-automation)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -29,8 +30,11 @@
 > between a retry that is safe and one that would run the workflow twice — and it can run
 > **both** providers at once, [routing each request](ROUTING.md) to the local model or to
 > Bedrock, with fallback when one is down and a hard refusal to let a private prompt leave
-> the network. Everything from
-> [Milestone 11](#milestone-11--loop-engineering) on is still a statement of intent. See [What exists today](#what-exists-today), which is
+> the network. On top of all that it can now pursue a **goal autonomously** — an
+> [explicit, bounded, recoverable agent loop](LOOP.md) that plans, executes, evaluates,
+> reflects, retries and stops safely, with the stopping conditions enforced in code rather
+> than hoped for in a prompt. Everything from
+> [Milestone 12](#milestone-12--github-webhook-automation) on is still a statement of intent. See [What exists today](#what-exists-today), which is
 > kept honest.
 
 An open design study and reference implementation for running **autonomous AI
@@ -55,6 +59,7 @@ on a repository, and how to keep the bill and the blast radius small.
 - [Managed inference with Amazon Bedrock](#managed-inference-with-amazon-bedrock)
 - [Claude, and a model that can act](#claude-and-a-model-that-can-act)
 - [Hybrid routing between local and managed models](#hybrid-routing-between-local-and-managed-models)
+- [Loop engineering: autonomous agents that know when to stop](#loop-engineering-autonomous-agents-that-know-when-to-stop)
 - [Technology Stack](#technology-stack)
 - [Repository Scope](#repository-scope)
 - [Related Repositories](#related-repositories)
@@ -129,6 +134,7 @@ Being explicit, because everything else on this page is aspirational:
 | Managed inference (Amazon Bedrock) | ✅ **Implemented** | [Milestone 8](#milestone-8--amazon-bedrock-integration): a **second** provider behind the same interface, switched by `LLM_PROVIDER` — no caller changed. IAM auth, model-scoped least privilege, throttling as its own error kind. See [INFERENCE.md](INFERENCE.md) |
 | Claude: reasoning, structured output, **tool use** | ✅ **Implemented** | [Milestone 9](#milestone-9--claude-integration): the model can be held to a **schema**, and can **call the platform's own tools** — trigger a workflow, hand work to an agent — inside a bounded loop. It is why "a retry is safe here" [had to be withdrawn](INFERENCE.md#a-retry-was-safe-here--milestone-9-withdrew-that). See [INFERENCE.md](INFERENCE.md) |
 | Hybrid routing | ✅ **Implemented** | [Milestone 10](#milestone-10--hybrid-ai-routing): a router that **is** an `llm.Provider`, choosing Ollama or Bedrock **per request** by purpose and capability, with health-aware fallback, a `RequireLocal` constraint the prompt cannot escape, and three retries it structurally refuses (a spoken stream, a committed effect, a live conversation). No caller changed. See [ROUTING.md](ROUTING.md) |
+| Loop engineering (autonomous agents) | ✅ **Implemented** | [Milestone 11](#milestone-11--loop-engineering): an explicit **loop controller** — a pure reducer — that drives a goal through plan → execute → evaluate → reflect → decide, with retries, reflection, always-enforced stopping conditions, and serialisable state for recovery. Reasoning delegates to the inference plane, execution to OpenClaw; the loop imports neither. See [LOOP.md](LOOP.md) |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -1354,6 +1360,92 @@ can it use tools), never a package name, so it routes between whatever it is han
 in `internal/architecture_test.go` fails the build if the router ever imports a vendor — so
 "add a provider without changing the routing layer" stays true rather than aspirational.
 
+## Loop engineering: autonomous agents that know when to stop
+
+**Milestone 11.** The platform can pursue a **goal** autonomously — plan it, execute the
+tasks, judge the results, reflect on failures, adapt, and stop safely — as an explicit,
+bounded loop rather than a single request and response.
+
+> 📄 [Building Autonomous AI Agents with Loop Engineering](docs/blog/building-autonomous-ai-agents-with-loop-engineering.md) — the blog post ·
+> 📐 [Diagrams](docs/architecture/loop-diagrams.md) ·
+> 🛠️ [LOOP.md](LOOP.md) — the reference
+
+```bash
+loop run --goal "Draft a blog post about the changes in this release" --repo owner/name
+```
+
+### The loop is the product; the model is a component
+
+The fifty-line version of an "autonomous agent" puts the loop **inside the model** — it asks
+the model for a plan, iterates, and lets the model decide when to stop. That works in a demo
+and fails as a bill: the decision to *continue* was the model's to make, where it could not be
+bounded, inspected, or tested. Loop Engineering takes the loop **out** of the model and makes
+it a program the platform owns.
+
+### The third loop, and deliberately none of the other two
+
+| Loop | Runs | Bounded by |
+| --- | --- | --- |
+| The agent's reasoning loop (M6) | *inside* OpenClaw | `MaxSteps` |
+| The tool loop (M9) | *inside* one inference | turns, cost |
+| **The loop controller (M11)** | *above* both, in the platform | iterations, retries, timeout, cost, stops |
+
+The controller **orchestrates** OpenClaw executions; it does not become one. It decides *which*
+tasks and *whether to continue* — which is orchestration, the platform's job — while OpenClaw
+executes and the inference plane reasons.
+
+### The controller is a pure reducer
+
+Two pure functions — `Decide(state) → action` and `Advance(state, result) → state` — and a
+driver that performs the actions. That one shape buys three requirements at once:
+
+- **Stopping conditions are always enforced** — checked at the top of `Decide`, before every
+  action, so no path starts expensive work with a blown budget. Eight of them: goal-achieved,
+  max-iterations, max-retries, max-replans, timeout, cost-exceeded, human-required,
+  critical-failure. The cost cap counts **both** the agent executions and the reasoning.
+- **State survives interruption** — it is a serialisable value, so a Spot reclaim mid-loop
+  loses only the in-flight step; the pending outcome rides along, so recovery never re-runs the
+  expensive execution.
+- **Every stage is a table test** — the whole controller is tested against fake engines, with
+  no model and no OpenClaw anywhere.
+
+### Where each stage runs
+
+**Plan · evaluate · reflect · summarise** are reasoning — single-shot, safe to retry — and go
+to the inference plane (`llm.Structured`, routed by M10). **Execute** is the one
+side-effecting, expensive, not-safe-to-retry step, and goes to OpenClaw. Keeping them different
+interfaces is what stops the loop conflating "think about the work" with "do the work".
+
+### Retry only what a second attempt could fix
+
+The retry framework retries **only transient failures** — a runtime blip, a timeout — never a
+task that ran and failed on its merits, which would fail identically and bill again. Exponential
+backoff, a finite per-task budget, and above it the hard iteration cap: **infinite retry loops
+are impossible by construction.** And a genuine loop retry is a *fresh* agent execution (the
+attempt is folded into the idempotency key), while a transport retry stays idempotent.
+
+### Reflection is behaviour change as data
+
+When a task fails and will be retried, the reflector rewrites its **instructions** — sharper,
+corrected — for the next attempt. The loop behaves differently and **not one line of loop code
+changed**. The revised instructions are authored on the platform's side of the boundary, never
+laundered from the repository content the failed agent read.
+
+### The loop imports neither a model nor a runtime
+
+`internal/loop` declares its stages as interfaces (`Planner`, `Executor`, …) and imports
+neither `internal/llm` nor `internal/agent`; `internal/loop/adapter` implements them against
+the real planes. A test fails the build if that changes — which is why the whole reducer, every
+stopping condition, and the retry machinery are tested with struct literals and no I/O, and why
+swapping the model or the runtime is an adapter change the loop never notices.
+
+### Who drives it
+
+The reducer never waits, so it has two drivers: the synchronous **`loop.Runner`** for the CLI
+and tests (which blocks, and must not be put in a Lambda), and **n8n** in production, which
+calls `Decide`, submits the agent execution, lets a durable wait node poll it, and calls
+`Advance` — across a run that may last hours. Same reducer, both drivers.
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -1369,6 +1461,7 @@ Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
 | Managed inference | Amazon Bedrock | [M8](#milestone-8--amazon-bedrock-integration) |
 | Frontier inference | Claude API | [M9](#milestone-9--claude-integration) |
 | Hybrid provider routing | The provider abstraction (Ollama + Bedrock) | [M10](#milestone-10--hybrid-ai-routing) |
+| Autonomous agent loop | The loop controller (a pure reducer) | [M11](#milestone-11--loop-engineering) |
 | Automation | GitHub webhooks and Actions | [M12](#milestone-12--github-webhook-automation) |
 | Observability | Amazon CloudWatch | [M15](#milestone-15--monitoring--observability) |
 | Release tooling | Go (standard library only) | ✅ implemented |
@@ -1717,12 +1810,21 @@ flowchart TB
 
 #### Milestone 11 — Loop Engineering
 
-- **Objective** — Control how an agent iterates: when it continues, when it
-  stops, and what it may spend.
-- **Primary focus** — Termination conditions, budget circuit-breakers, and
-  recovering from an agent that will not converge.
-- **Related technologies** — The agent runtime, the budget circuit-breaker.
-- **Expected outcome** — Agents that finish, and that cannot spend without limit.
+- **Status** — ✅ **Shipped.** Code in [`internal/loop`](internal/loop); reference in
+  [LOOP.md](LOOP.md); the walkthrough is the blog post,
+  [Building Autonomous AI Agents with Loop Engineering](docs/blog/building-autonomous-ai-agents-with-loop-engineering.md).
+- **Objective** — Control how an agent iterates: when it continues, when it stops, and what it
+  may spend — by taking the loop **out of the model** and making it an explicit program.
+- **Primary focus** — A loop controller written as a **pure reducer** (`Decide` / `Advance`):
+  stopping conditions enforced before every action, a finite retry framework that retries only
+  transient failures, reflection that rewrites a task's instructions between attempts, and
+  serialisable state so a Spot reclaim mid-loop loses only the in-flight step.
+- **Related technologies** — The inference plane (reasoning), OpenClaw (execution), n8n (the
+  durable driver). The loop imports none of them — it declares its stages as interfaces.
+- **Outcome** — Agents that finish, that cannot spend without limit, and whose every decision
+  is a function you can read and a table test you can run — with no model and no agent in the
+  test. *The loop is the platform's **third** loop and deliberately none of the other two: it
+  orchestrates OpenClaw executions rather than becoming one.*
 
 #### Milestone 12 — GitHub Webhook Automation
 

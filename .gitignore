@@ -7,6 +7,9 @@
 # accident.
 /release
 /workflow
+/agent
+/llm
+/loop
 
 # Test and coverage artifacts
 *.out
