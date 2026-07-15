@@ -297,17 +297,26 @@ scalability models — is documented in the Milestone 1 deliverables:
 These are design documents from Milestone 1: the diagram above is the **target**,
 and most of it (n8n, OpenClaw, Ollama, Bedrock routing) is still unbuilt.
 
-### What is actually deployed (Milestones 2–4)
+### What is actually deployed (through Milestone 17)
 
-The diagram above is the **target**. This is the **present** — the same AWS service
-view, drawn for what really exists in the account today:
-
-![The platform as built after Milestone 7: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sit three component repositories the platform integrates with but does not deploy — self-hosted n8n for orchestration, OpenClaw for agentic execution (which calls its own model and whose output is untrusted), and Ollama for local inference, where the prompt never leaves the network; hosted inference and hybrid routing are not built yet.](docs/architecture/platform-as-built.svg)
+The diagram above is the **target**. The **present** now spans thirteen CloudFormation
+stacks: the same disposable Spot instance, plus a non-blocking webhook front door (M12),
+a router that chooses a provider per request (M10), a work queue that decouples
+long-running tasks from orchestration (M16), and the monitoring (M13), security (M14),
+and cost (M15) planes — with an autonomous loop controller (M11) and a test-enforced
+extension model (M17) in the Go layers. The authoritative, always-current view is the
+**living diagram set**, kept as Mermaid so it never drifts:
 
 > 🗺️ **[The Platform As Built](docs/architecture/current-architecture.md)** — the
-> living diagram set (runtime topology, stack map, the life of one instance),
-> updated every milestone. The gap between it and the target above is the roadmap,
-> and it is deliberately visible.
+> living diagram set (runtime topology, stack map, the life of one instance, and what
+> each milestone added), updated every milestone and current through M17. The gap
+> between it and the M1 target above is the roadmap, and it is deliberately visible.
+
+The hand-authored SVG below is a **historical snapshot frozen at Milestone 7** — kept as
+the record of that stage, not as the current topology. For anything past M7 (routing, the
+front door, the queue, monitoring, security, cost), read the living doc above.
+
+![The platform as built after Milestone 7 (historical snapshot): an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sit three component repositories the platform integrates with but does not deploy — self-hosted n8n for orchestration, OpenClaw for agentic execution (which calls its own model and whose output is untrusted), and Ollama for local inference, where the prompt never leaves the network; the webhook front door, hybrid routing, the work queue, and the monitoring, security and cost planes are all later milestones, shown in the living diagram set.](docs/architecture/platform-as-built.svg)
 
 ## Cost optimization with EC2 Spot
 
