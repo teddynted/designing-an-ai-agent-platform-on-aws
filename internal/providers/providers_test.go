@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -108,6 +109,74 @@ func TestAMisconfiguredProviderFailsToBuild(t *testing.T) {
 
 	if _, _, err := New(context.Background(), discardLogger()); err == nil {
 		t.Fatal("a Bedrock provider with no model must not build")
+	}
+}
+
+// LLM_PROVIDER=router builds a provider that is itself a router over both vendors — and
+// still returns an llm.Provider, so the caller cannot tell it apart from a single one. This
+// is Milestone 10's version of "switch providers through configuration": the same one
+// variable now also turns on routing between them.
+func TestTheRouterIsBuiltByConfiguration(t *testing.T) {
+	ollamaEnv(t)
+	bedrockEnv(t)
+	t.Setenv(EnvProvider, Router)
+	t.Setenv("LLM_ROUTER_PROVIDERS", "ollama,bedrock")
+
+	provider, info, err := New(context.Background(), discardLogger())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if provider.Name() != Router {
+		t.Errorf("built %q, want the router", provider.Name())
+	}
+	if !info.Routed || len(info.Members) != 2 {
+		t.Errorf("Info = %+v, want it to describe both members without leaking a vendor type", info)
+	}
+
+	// A mixed fleet cannot promise the prompt stays home — the one capability that is an
+	// intersection rather than a union.
+	if provider.Capabilities().Local {
+		t.Error("a router over Ollama AND Bedrock must not report Local — it might send this " +
+			"prompt to Bedrock")
+	}
+	// But it CAN do tools, because Bedrock can. That is the union.
+	if !provider.Capabilities().Tools {
+		t.Error("the router should report Tools — Bedrock can, so the fleet can")
+	}
+}
+
+// If any enabled provider will not build, the whole router refuses — because a router that
+// silently came up with one of its two providers missing has no fallback, and reports itself
+// perfectly healthy while being unable to do the thing it was configured for.
+func TestTheRouterRefusesToBootHalfConfigured(t *testing.T) {
+	ollamaEnv(t)
+	t.Setenv(EnvProvider, Router)
+	t.Setenv("LLM_ROUTER_PROVIDERS", "ollama,bedrock")
+	t.Setenv("BEDROCK_MODEL_ID", "") // Bedrock cannot build
+
+	_, _, err := New(context.Background(), discardLogger())
+	if err == nil {
+		t.Fatal("a router with a member that will not build must not boot — degraded is a state " +
+			"you fall INTO, not one you start in")
+	}
+	if !errors.Is(err, ErrConfig) {
+		t.Errorf("err = %v, want it to wrap ErrConfig", err)
+	}
+}
+
+// A routing table that names a provider the platform does not have is a start-up error, and
+// it says which provider and what is known.
+func TestTheRouterRejectsAnUnknownMember(t *testing.T) {
+	ollamaEnv(t)
+	t.Setenv(EnvProvider, Router)
+	t.Setenv("LLM_ROUTER_PROVIDERS", "ollama,gpt-9")
+
+	_, _, err := New(context.Background(), discardLogger())
+	if err == nil {
+		t.Fatal("want a start-up error for an unknown routed provider")
+	}
+	if !strings.Contains(err.Error(), "gpt-9") {
+		t.Errorf("err = %q, want it to name the offending provider", err)
 	}
 }
 

@@ -359,6 +359,11 @@ func Retryable(err error) bool {
 	case errors.Is(err, ErrStreamBroken):
 		// The caller has half an answer. A retry gives them a second beginning.
 		return false
+	case errors.Is(err, ErrNoProvider):
+		// Milestone 10. It looks like an outage and it is not one: no configured provider
+		// can do this, and none of them will be able to until a human changes something.
+		// Retrying is a loop that asks a fleet the same impossible question forever.
+		return false
 	case errors.Is(err, ErrThrottled), errors.Is(err, ErrUnavailable),
 		errors.Is(err, ErrTimeout), errors.Is(err, ErrStalled):
 		return true

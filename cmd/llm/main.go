@@ -41,6 +41,7 @@ import (
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/openclaw"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/prompt"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/providers"
+	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/router"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/tools"
 	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/workflow"
 )
@@ -109,6 +110,8 @@ func run(args []string) error {
 		return check(ctx)
 	case "generate":
 		return generate(ctx, args[1:])
+	case "route":
+		return route(ctx, args[1:])
 	case "converse":
 		return converse(ctx, args[1:])
 	case "triage":
@@ -198,8 +201,10 @@ func generate(ctx context.Context, args []string) error {
 		system      = fs.String("system", "", "the system prompt — how the model should behave")
 		prompt      = fs.String("prompt", "", "the prompt")
 		promptFile  = fs.String("prompt-file", "", "read the prompt from a file (use - for stdin)")
-		purpose     = fs.String("purpose", "cli", "what this inference is for, for the logs")
+		purpose     = fs.String("purpose", "cli", "what this inference is for, for the logs (and, under the router, what it routes on)")
 		correlation = fs.String("correlation", "", "correlation ID, to tie this to a GitHub delivery")
+		provider    = fs.String("provider", "", "pin this request to one provider by name (router only); it will NOT fall back")
+		local       = fs.Bool("local", false, "refuse any provider whose inference leaves the network — a constraint, never traded away")
 		temperature = fs.Float64("temperature", 0, "0 = the configured default")
 		maxTokens   = fs.Int("max-tokens", 0, "completion budget (0 = the configured default)")
 		seed        = fs.Int("seed", 0, "make the generation reproducible")
@@ -234,6 +239,8 @@ func generate(ctx context.Context, args []string) error {
 		Prompt:        text,
 		Purpose:       llm.Purpose(*purpose),
 		CorrelationID: *correlation,
+		Provider:      *provider,
+		RequireLocal:  *local,
 		Options: llm.Options{
 			Temperature: *temperature,
 			MaxTokens:   *maxTokens,
@@ -273,6 +280,14 @@ func generate(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// Under the router the interesting question is WHERE this went, and the answer is not
+	// the configured provider — it is res.Provider, filled in by whoever actually served it.
+	// This is the CLI's window onto a routing decision: run the same prompt with --purpose
+	// release-notes and watch it land somewhere else.
+	if res.Provider != "" && res.Provider != svc.Provider().Name() {
+		fmt.Fprintf(os.Stderr, "\n--- served by: %s ---\n", res.Provider)
+	}
+
 	// The numbers that matter, on stderr so that stdout is just the completion and can
 	// be piped into something else.
 	fmt.Fprintf(os.Stderr, "\n--- %d tokens in %s · %.1f tok/s · load %s · finish: %s ---\n",
@@ -288,6 +303,93 @@ func generate(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, "warning: the answer was CUT OFF by the token budget — raise --max-tokens.")
 	}
 	return nil
+}
+
+// route shows the routing table and probes each provider's health.
+//
+// It is the operator's answer to two questions that a single-provider platform never has to
+// ask: "what will happen to a request?" and "which of my providers is actually up?". The
+// first is the configuration — the strategy, the rules, the fallback order. The second needs
+// a live probe, which is why this command reaches past the interface to the router.
+//
+// # Why the type assertion is here and nowhere else
+//
+// Everything else in this CLI talks to an llm.Provider and does not care what is behind it —
+// that is the whole point of the abstraction, and Milestone 8 added Bedrock by changing one
+// line. But `route` is SPECIFICALLY about the router: its health, its decisions, its fleet.
+// A command whose entire subject is the router is allowed to ask whether it has one. The
+// alternative — a Health() method on llm.Provider that every single-provider implementation
+// stubs out — would push routing's vocabulary into the interface that exists precisely to
+// not know routing happens.
+func route(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("route", flag.ContinueOnError)
+	noProbe := fs.Bool("no-probe", false, "show the table but do not call the providers")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: llm route [--no-probe]\n\n"+
+			"Show the routing table and probe each provider. Requires LLM_PROVIDER=router.\n")
+	}
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+
+	svc, info, err := service(ctx, slog.LevelWarn)
+	if err != nil {
+		return err
+	}
+
+	r, ok := svc.Provider().(*router.Router)
+	if !ok {
+		// Not an error — a single provider is a legitimate configuration, and routing is
+		// opt-in. Say what IS configured, and how to turn routing on.
+		fmt.Printf("provider: %s (not a router)\n\n", svc.Provider().Name())
+		fmt.Printf("This platform is running a single provider. Routing between a local model and a\n"+
+			"managed one is turned on with:\n\n  LLM_PROVIDER=%s\n  LLM_ROUTER_PROVIDERS=ollama,bedrock\n\n"+
+			"See ROUTING.md.\n", providers.Router)
+		return nil
+	}
+
+	pretty, _ := json.MarshalIndent(info.Redacted, "", "  ")
+	fmt.Printf("routing table:\n%s\n\n", pretty)
+
+	if *noProbe {
+		// The passive view: what real traffic has already learned, with no new calls.
+		fmt.Println("health (from observed traffic; --no-probe):")
+		printHealth(r.Snapshot())
+		return nil
+	}
+
+	fmt.Println("probing each provider (listing models — no tokens generated)...")
+	statuses := r.Check(ctx)
+	fmt.Println()
+	printHealth(statuses)
+
+	// A router where nothing is healthy is a platform that is down, and it should exit
+	// non-zero so a start-up check or a CI step can notice.
+	for _, s := range statuses {
+		if s.Healthy {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: no provider in the fleet is healthy", llm.ErrUnavailable)
+}
+
+func printHealth(statuses []router.Status) {
+	fmt.Printf("%-12s %-9s %-8s %-10s %s\n", "PROVIDER", "HEALTHY", "MODELS", "LATENCY", "NOTE")
+	for _, s := range statuses {
+		note := ""
+		if s.Error != "" {
+			note = s.Error
+		} else if s.Models == 0 && s.Latency > 0 {
+			// Up, reachable, and empty. This is what an Ollama nobody has `ollama pull`ed
+			// looks like, and it is a confusing state to meet for the first time in prod.
+			note = "reachable but has no models — pull one"
+		}
+		latency := "-"
+		if s.Latency > 0 {
+			latency = s.Latency.Round(time.Millisecond).String()
+		}
+		fmt.Printf("%-12s %-9v %-8d %-10s %s\n", s.Provider, s.Healthy, s.Models, latency, note)
+	}
 }
 
 func readPrompt(prompt, file string) (string, error) {
@@ -332,7 +434,9 @@ func usage() {
 
   llm models                     what models the provider has
   llm check                      is the configured model actually there?
+  llm route                      the routing table + a health probe          (M10)
   llm generate --prompt "…"      stream a completion
+                                 (--provider pins it; --local keeps it home)  (M10)
   llm converse --prompt "…"      let the model USE THE PLATFORM'S TOOLS  (M9)
   llm triage --diff-file f.diff  a STRUCTURED answer, not prose          (M9)
   llm compose --template … --format mermaid|yaml|json|markdown|table     (M9)
@@ -363,7 +467,18 @@ converse also needs n8n (N8N_BASE_URL) and OpenClaw (OPENCLAW_BASE_URL), because
 platform's tools ARE its integrations: the model can list and RUN workflows, and hand
 work to an agent. Two of those tools change things, and the model is told so.
 
-See INFERENCE.md.
+Hybrid routing (M10) — run BOTH providers and choose per request:
+
+  LLM_PROVIDER=router
+  LLM_ROUTER_PROVIDERS=ollama,bedrock
+  LLM_ROUTER_STRATEGY=purpose            fixed | purpose
+  LLM_ROUTER_RULES=release-notes=bedrock,diff-summary=ollama
+  LLM_ROUTER_FALLBACK=true               fail over when a provider is down
+
+  llm route                              see the table and probe health
+  llm generate --local --prompt "…"      refuse any provider that leaves the network
+
+See INFERENCE.md and ROUTING.md.
 `)
 }
 

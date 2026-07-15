@@ -243,6 +243,14 @@ func (s *Service) begin(req Request) (*slog.Logger, error) {
 
 // finish logs the outcome and returns it.
 func (s *Service) finish(log *slog.Logger, req Request, res Response, err error, streamed bool) (Response, error) {
+	// Who actually answered. With a single provider this is the provider we asked, and the
+	// field would be noise; with a router it is the only line in the log that can tell you
+	// whether this inference cost money or merely cost GPU time — and, when it failed,
+	// which of several providers is the one that is broken.
+	if res.Provider != "" && res.Provider != s.provider.Name() {
+		log = log.With("servedBy", res.Provider)
+	}
+
 	if err != nil {
 		log.Error("inference failed",
 			"error", err,
@@ -343,6 +351,12 @@ func Kind(err error) string {
 	// table, and an alert that missed it would be advising someone to run a workflow twice.
 	case errors.Is(err, ErrEffectsCommitted):
 		return "effects_committed"
+
+	case errors.Is(err, ErrNoProvider):
+		// Before ErrUnsupported, which it usually wraps: "none of them can do this" is a
+		// more actionable fact than "this one cannot", and it is the difference between
+		// changing a request and changing the configuration.
+		return "no_provider"
 
 	case errors.Is(err, ErrUnsupported):
 		return "unsupported"
