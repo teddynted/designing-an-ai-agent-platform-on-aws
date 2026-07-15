@@ -53,6 +53,10 @@ Resources:
       FunctionName: !Sub "${ProjectName}-${Environment}-dispatch"
       Description: Placeholder event dispatcher; logs the received event.
       Runtime: python3.12
+      # arm64 (Graviton) is ~20% cheaper per GB-second than x86_64 at identical
+      # performance for this workload, and matches the platform's Go Lambdas, which
+      # are all arm64 (Milestone 15). Nothing here is architecture-specific.
+      Architectures: [arm64]
       Handler: index.handler
       Timeout: 15
       MemorySize: 128

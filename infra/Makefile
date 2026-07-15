@@ -53,6 +53,8 @@ SPOT_TAGS   := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Mi
 MON_TAGS    := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=13
 # Auditing & security monitoring is Milestone 14.
 SEC_TAGS    := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=14
+# Cost guardrails is Milestone 15.
+COST_TAGS   := Project=$(PROJECT) Environment=$(ENV) ManagedBy=CloudFormation Milestone=15
 
 # Alarm notification email for the monitoring stack (10-monitoring). Empty deploys
 # the SNS topic with no subscription; set it to receive alarm emails (AWS sends a
@@ -63,6 +65,12 @@ ALARM_EMAIL ?=
 # from ALARM_EMAIL by design: "someone used the root account" is a different page
 # than "the platform is unhealthy". Empty deploys the topic with no subscription.
 SECURITY_EMAIL ?=
+
+# Email subscribed to the COST alarm topic (12-cost), plus the monthly budget in
+# USD. A separate address again: "you are about to overspend" often reaches the
+# bill payer, not the on-call engineer. BUDGET_LIMIT overrides the template default.
+COST_EMAIL   ?=
+BUDGET_LIMIT ?=
 
 # Per-stack extra parameter overrides. Only the compute stack declares
 # PurchaseOption and InstanceType, so they must be passed to that stack alone —
@@ -94,6 +102,7 @@ STACKS      := 01-network 02-iam 03-compute 04-storage 05-events 06-observabilit
 .PHONY: webhook deploy-webhook delete-webhook
 .PHONY: monitoring deploy-monitoring delete-monitoring
 .PHONY: security deploy-security delete-security
+.PHONY: cost deploy-cost delete-cost
 .PHONY: ami ami-list ami-prune deploy-ami drain-sync check-drain-sync startup-benchmark
 .PHONY: help lint validate deploy delete outputs bootstrap install-hooks import-storage
 
@@ -200,7 +209,7 @@ import-storage: ## Fix the storage stack alone (adopts an orphaned artifact buck
 # `make deploy`), but a stack you deployed is a stack you want the outputs of.
 # Undeployed ones simply print "(not deployed)".
 outputs: ## Print the outputs of every deployed stack
-	@for s in $(STACKS) 07-scheduler 08-spot 09-webhook 10-monitoring 11-security; do \
+	@for s in $(STACKS) 07-scheduler 08-spot 09-webhook 10-monitoring 11-security 12-cost; do \
 		echo "== $(PROJECT)-$(ENV)-$$s =="; \
 		aws cloudformation describe-stacks --region $(REGION) \
 			--stack-name $(PROJECT)-$(ENV)-$$s \
@@ -449,6 +458,34 @@ deploy-security: ## Deploy security (SECURITY_EMAIL=you@example.com to be paged;
 delete-security: ## Delete the security stack (the trail bucket and its KMS key are retained)
 	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-11-security
 	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-11-security
+
+# --- Cost guardrails (Milestone 15) -----------------------------------------
+#
+# AWS Budgets, Cost Anomaly Detection, and a CloudWatch billing alarm, all on one
+# SNS topic. Pure CloudFormation — no Go to build. The billing metric lives only
+# in us-east-1, so deploy this in us-east-1 (the project default) for the alarm to
+# work. Cost Anomaly Detection needs Cost Explorer enabled on the account (a free,
+# one-time opt-in); pass ENABLE_ANOMALY=false to skip it until then.
+ENABLE_ANOMALY ?=
+
+cost: deploy-cost ## Deploy the cost guardrails stack (budget, anomaly detection, billing alarm)
+
+deploy-cost: ## Deploy cost guardrails (COST_EMAIL=you@example.com BUDGET_LIMIT=50; ENABLE_ANOMALY=false if Cost Explorer is off)
+	aws cloudformation deploy \
+		--stack-name $(PROJECT)-$(ENV)-12-cost \
+		--template-file $(CFN_DIR)/12-cost.yaml \
+		--region $(REGION) --capabilities $(CAPS) \
+		--parameter-overrides $(PARAMS) \
+			$(if $(COST_EMAIL),CostEmail=$(COST_EMAIL)) \
+			$(if $(BUDGET_LIMIT),MonthlyBudgetUsd=$(BUDGET_LIMIT)) \
+			$(if $(ENABLE_ANOMALY),EnableAnomalyDetection=$(ENABLE_ANOMALY)) \
+		--tags $(COST_TAGS)
+	@echo "cost guardrails deployed. Confirm the SNS subscription in your inbox to receive alerts."
+	@echo "  Budget + anomaly detection + billing alarm all publish to the cost topic."
+
+delete-cost: ## Delete the cost guardrails stack
+	aws cloudformation delete-stack --region $(REGION) --stack-name $(PROJECT)-$(ENV)-12-cost
+	aws cloudformation wait stack-delete-complete --region $(REGION) --stack-name $(PROJECT)-$(ENV)-12-cost
 
 # Rehearse an interruption without waiting for AWS to take the instance away.
 #

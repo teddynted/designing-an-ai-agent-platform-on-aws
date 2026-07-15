@@ -15,7 +15,8 @@
 [![Milestone 12](https://img.shields.io/badge/M12%20GitHub%20Webhooks-shipped-brightgreen)](docs/blog/automating-ai-workflows-with-github-webhooks.md)
 [![Milestone 13](https://img.shields.io/badge/M13%20Observability-shipped-brightgreen)](docs/blog/monitoring-an-ai-agent-platform-with-cloudwatch.md)
 [![Milestone 14](https://img.shields.io/badge/M14%20Security-shipped-brightgreen)](docs/blog/securing-an-ai-agent-platform-on-aws.md)
-[![Next milestone](https://img.shields.io/badge/next-M15%20Cost%20Optimization-lightgrey)](#milestone-15--cost-optimization)
+[![Milestone 15](https://img.shields.io/badge/M15%20Cost%20Optimization-shipped-brightgreen)](docs/blog/cost-optimization-strategies-for-ai-platforms-on-aws.md)
+[![Next milestone](https://img.shields.io/badge/next-M16%20Scalability-lightgrey)](#milestone-16--scalability)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -44,8 +45,12 @@
 > the agent's egress is an allow-list rather than open, the account has a validated, encrypted
 > **CloudTrail** with alarms that page a human on root use or a tampered audit log, and prompt
 > injection is treated as the privilege-escalation problem it is — bounded by least privilege
-> and egress, not hoped away in a prompt. Everything from
-> [Milestone 15](#milestone-15--cost-optimization) on is still a statement of intent. See [What exists today](#what-exists-today), which is
+> and egress, not hoped away in a prompt. And it is now [cheap to leave running — and cheap to
+> leave running by accident](COST.md): Spot, a scheduler and a 2.5s-boot AMI mean you pay for
+> instance-hours not calendar months, a local model answers the ordinary request for the price
+> of electricity while Bedrock is the paid exception, and an **AWS Budget plus Cost Anomaly
+> Detection** page the bill payer when an optimisation silently regresses. Everything from
+> [Milestone 16](#milestone-16--scalability) on is still a statement of intent. See [What exists today](#what-exists-today), which is
 > kept honest.
 
 An open design study and reference implementation for running **autonomous AI
@@ -151,6 +156,7 @@ Being explicit, because everything else on this page is aspirational:
 | GitHub webhook automation | ✅ **Implemented** | [Milestone 12](#milestone-12--github-webhook-automation): a Lambda behind a Function URL that **verifies** the HMAC signature (constant-time, over the raw body, before parsing), **filters** the event, and **publishes** a curated event to **EventBridge** — never calling n8n or a model directly, so GitHub's ten-second webhook can't be timed out into a double execution. Least-privilege IAM, the secret in Secrets Manager. See [WEBHOOKS.md](WEBHOOKS.md) |
 | Monitoring & observability | ✅ **Implemented** | [Milestone 13](#monitoring-and-observability-with-cloudwatch): one shared observability standard — structured logging with a **correlation ID that spans services**, secrets and repository content **redacted by the handler**, **EMF** metrics that cost nothing the logs did not, three CloudWatch **dashboards**, actionable **alarms** on an SNS path, liveness/readiness **health probes**, and **X-Ray** tracing that is honest about where it stops. A leaf library ([`internal/observability`](internal/observability)) anything can import, a CFN stack ([`10-monitoring.yaml`](infra/cloudformation/10-monitoring.yaml)), and the CloudWatch agent now shipping memory and disk. See [OBSERVABILITY.md](OBSERVABILITY.md) |
 | Security & auditing | ✅ **Implemented** | [Milestone 14](#milestone-14--security): prompt injection treated as a **privilege-escalation** problem, not a content-filtering one. The agent's egress becomes an **allow-list** (HTTPS/HTTP/DNS) with a free **S3 gateway endpoint**, so a compromised process can't open an arbitrary socket to exfiltrate over; a multi-region **CloudTrail** with **log-file validation**, its own **KMS key**, and dual delivery to S3 **and** CloudWatch Logs; and the **CIS-benchmark alarm set** — root usage, denied calls, MFA-less sign-in, IAM/SG/trail changes — paging a **separate** security SNS topic. A CFN stack ([`11-security.yaml`](infra/cloudformation/11-security.yaml)) plus egress hardening in `01-network` and an SSE-KMS option in `04-storage`. See [SECURITY.md](SECURITY.md) |
+| Cost optimization | ✅ **Implemented** | [Milestone 15](#milestone-15--cost-optimization): the cost decisions were mostly made right upstream (**Spot**, a **scheduler**, a **2.5s-boot AMI** so stopping the box is free to undo, **local-first routing**, **arm64** everything, and **no NAT gateway** — ~\$32/mo designed out). This milestone adds the **FinOps guardrails** that keep it there — an **AWS Budget** with a forecasted-breach alert, per-service **Cost Anomaly Detection**, and a billing alarm, on their own SNS topic ([`12-cost.yaml`](infra/cloudformation/12-cost.yaml)) — plus two honest tunings (arm64 for the last x86 Lambda, S3 Intelligent-Tiering) and a full cost model. See [COST.md](COST.md) |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -1742,6 +1748,72 @@ The egress hardening and the S3 endpoint ship with the network stack
 parameter on the storage stack. Full reasoning, the threat model, and the
 production-hardening boundary are in **[SECURITY.md](SECURITY.md)**.
 
+## Milestone 15 — Cost Optimization
+
+**Milestone 15.** The platform is made cheap to leave running — and, more usefully,
+cheap to leave running *by accident*. Most of the expensive decisions were already
+made correctly in earlier milestones; this milestone documents the full cost model
+and adds the FinOps guardrails that catch a silent regression.
+
+> 📄 [Cost Optimization Strategies for AI Platforms on AWS](docs/blog/cost-optimization-strategies-for-ai-platforms-on-aws.md) — the blog post ·
+> 📐 [Cost optimization diagrams](docs/architecture/cost-optimization-diagrams.md) ·
+> 🛠️ [COST.md](COST.md) — the reference
+
+### The cheapest resource is the one switched off
+
+An AI agent platform has an unusual bill: its expensive component is idle most of the
+time and then, briefly, does everything. So the whole strategy is to refuse to pay for
+the idle. **Spot** buys the `t3.xlarge` at ~a third of On-Demand because the compute
+tolerates interruption; a **scheduler** stops it overnight and on weekends; and the
+**custom AMI's 2.5-second boot** is what makes stopping it *practical* — a 76-second
+boot would make always-on the rational choice, and an idle always-on box is where AI
+platform bills go to die.
+
+### The most expensive line is the one that is not there
+
+The platform has **no NAT gateway** — ~\$32/month designed out of existence, replaced
+by an internet gateway, an egress allow-list, and a free S3 gateway endpoint. It was a
+security decision (Milestone 14), but the cheapest line item is the one you never
+create, and it is invisible precisely because it was never there.
+
+### Ollama and Bedrock are two cost structures, not two qualities
+
+The router (Milestone 10) already prefers the local model and falls back to Bedrock.
+As cost: Ollama is **fixed** (the EC2 hour you already pay for; marginal cost ≈ \$0),
+Bedrock is **variable** (per token, \$0 when idle). Local wins for steady volume,
+Bedrock for spiky or rare traffic and models too large to self-host — and Bedrock's
+per-token cost is managed at the *prompt*, not the infrastructure.
+
+### The guardrails: tripwires for silent regressions
+
+The failure mode that costs money is not an outage — it is a good architecture that
+quietly stopped being followed (an instance that did not stop, a loop that will not
+stop calling Bedrock). Functional monitoring never fires on "works fine, costs triple",
+so [`12-cost.yaml`](infra/cloudformation/12-cost.yaml) adds financial smoke detectors:
+an **AWS Budget** with a *forecasted*-breach alert (warns while there is still month to
+act), per-**service** **Cost Anomaly Detection** (names *which* service got expensive),
+and a **billing alarm** — all on one SNS topic, separate from the monitoring and
+security topics because the bill payer is not always the on-call engineer.
+
+### What it costs
+
+| Profile | Estimate |
+| --- | --- |
+| Development (scheduled off nights/weekends, mostly local inference) | ~\$25–35/mo |
+| Small production (~12h/day Spot, some Bedrock) | ~\$70–130/mo |
+| Medium production (~24×7, regular Bedrock incl. larger models) | ~\$250–450/mo |
+
+### Deploy it
+
+```bash
+cd infra
+make cost COST_EMAIL=you@example.com BUDGET_LIMIT=50   # budget, anomaly detection, billing alarm
+# then confirm the SNS subscription in your inbox — nothing is delivered until you do
+```
+
+Full line-item breakdowns, the Ollama/Bedrock break-even, the Well-Architected mapping,
+and where to look first when the budget alarm fires are in **[COST.md](COST.md)**.
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -2181,11 +2253,25 @@ flowchart TB
 
 #### Milestone 15 — Cost Optimization
 
+- **Status** — ✅ **Shipped.** Cost guardrails in
+  [`infra/cloudformation/12-cost.yaml`](infra/cloudformation/12-cost.yaml), with
+  arm64/Intelligent-Tiering tunings in
+  [`05-events.yaml`](infra/cloudformation/05-events.yaml) and
+  [`04-storage.yaml`](infra/cloudformation/04-storage.yaml); reference in
+  [COST.md](COST.md); diagrams in
+  [cost-optimization-diagrams.md](docs/architecture/cost-optimization-diagrams.md);
+  the walkthrough is the blog post,
+  [Cost Optimization Strategies for AI Platforms on AWS](docs/blog/cost-optimization-strategies-for-ai-platforms-on-aws.md).
 - **Objective** — Make the platform affordable to leave running.
-- **Primary focus** — Idle GPU, batch inference, prompt caching, and enforced
-  budgets.
-- **Related technologies** — Spot, Bedrock batch, AWS Budgets.
-- **Expected outcome** — A measured cost model, and circuit-breakers that hold.
+- **Primary focus** — Pay for hours not months (Spot + scheduler + fast-boot AMI),
+  local-first inference to avoid per-token cost, no idle network tax (no NAT
+  gateway), and FinOps guardrails — an AWS Budget, Cost Anomaly Detection, a billing
+  alarm — that catch a silent regression.
+- **Related technologies** — EC2 Spot, EventBridge Scheduler, AWS Budgets, Cost
+  Anomaly Detection, CloudWatch, Amazon Bedrock, Ollama, S3 Intelligent-Tiering.
+- **Outcome** — A measured cost model (dev/small/medium estimates), the two honest
+  tunings that had slack, and tripwires that page the bill payer before the month
+  runs away — not after.
 
 #### Milestone 16 — Scalability
 

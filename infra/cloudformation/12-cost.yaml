@@ -1,0 +1,265 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  AI Agent Platform — Cost guardrails (Milestone 15).
+  The platform is already built to be cheap — Spot compute, a scheduler that
+  stops the instance overnight, arm64 Lambdas, a local model that answers most
+  requests for the price of electricity. This stack is what makes that *stay*
+  true: an AWS Budget that warns before the month runs away, Cost Anomaly
+  Detection that catches the spend nobody predicted (a stuck instance, a runaway
+  loop calling Bedrock), and a billing alarm — all routed to one SNS topic a
+  human subscribes to once. It optimises nothing by itself; it is the smoke
+  detector that tells you an optimisation has silently regressed.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: aiap
+    AllowedPattern: "[a-z0-9-]+"
+    Description: Lower-case project prefix. Must match the other stacks.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment. Must match the other stacks.
+
+  CostEmail:
+    Type: String
+    Default: ""
+    Description: >-
+      Email subscribed to the cost SNS topic. Empty creates the topic with no
+      subscription. A real address receives an AWS confirmation that must be
+      clicked before anything is delivered. Budget, anomaly, and billing alerts
+      all arrive here.
+
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 50
+    MinValue: 1
+    Description: >-
+      Monthly cost budget in USD. The default of 50 fits a dev environment that
+      runs a scheduled t3.xlarge Spot instance part-time; raise it for staging or
+      production. AWS Budgets is free for the first two budgets.
+
+  AlertThresholdPercent:
+    Type: Number
+    Default: 80
+    MinValue: 1
+    MaxValue: 100
+    Description: >-
+      Percent of the budget at which the first (early-warning) notification
+      fires. A second notification always fires at 100% actual, and a third when
+      spend is *forecast* to exceed 100% — the one that warns you before the money
+      is gone, not after.
+
+  AnomalyThresholdUsd:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    Description: >-
+      Minimum total dollar impact before Cost Anomaly Detection raises an alert.
+      Below this, day-to-day noise is ignored; at or above it, an unexpected spend
+      pattern pages the topic immediately.
+
+  EnableAnomalyDetection:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Create the Cost Anomaly Detection monitor and subscription. Requires AWS
+      Cost Explorer to be enabled on the account (a one-time, free opt-in in the
+      Billing console). Set to false if Cost Explorer is not yet enabled, or the
+      stack create will fail when the anomaly monitor cannot be provisioned.
+
+Conditions:
+  HasEmail: !Not [!Equals [!Ref CostEmail, ""]]
+  WithAnomalyDetection: !Equals [!Ref EnableAnomalyDetection, "true"]
+
+Resources:
+  # ===========================================================================
+  # One topic for every cost signal. Budgets, Cost Anomaly Detection, and the
+  # billing alarm all publish here; a human subscribes once. Keeping cost alerts
+  # off the monitoring and security topics is deliberate: "you are about to spend
+  # more than planned" is a different, calmer conversation than "the platform is
+  # down" or "someone used root", and often reaches a different person (the bill
+  # payer, not the on-call engineer).
+  # ===========================================================================
+  CostTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-cost-alerts"
+      DisplayName: !Sub "${ProjectName} ${Environment} cost"
+
+  CostEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasEmail
+    Properties:
+      TopicArn: !Ref CostTopic
+      Protocol: email
+      Endpoint: !Ref CostEmail
+
+  # The topic policy grants exactly the two AWS billing services that need to
+  # publish, each pinned to THIS account with aws:SourceAccount so no other
+  # account's budget or anomaly monitor can push to our topic. CloudWatch (the
+  # billing alarm) publishes under the account's own credentials and needs no
+  # grant here.
+  CostTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref CostTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowBudgetsPublish
+            Effect: Allow
+            Principal:
+              Service: budgets.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref CostTopic
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref "AWS::AccountId"
+          - Sid: AllowCostAnomalyPublish
+            Effect: Allow
+            Principal:
+              Service: costalerts.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref CostTopic
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref "AWS::AccountId"
+
+  # ===========================================================================
+  # The budget. A monthly cost ceiling with three notifications: an early warning
+  # at AlertThresholdPercent of actual spend, a 100%-of-actual notice, and — the
+  # important one — a FORECASTED breach, which fires when AWS projects the month
+  # will end over budget while there is still time to act.
+  # ===========================================================================
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub "${ProjectName}-${Environment}-monthly"
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+        # Deliberately account-wide, not tag-scoped. A tag CostFilter would only
+        # track spend once "Project" is activated as a cost-allocation tag in the
+        # Billing console — until then it silently reports $0, a budget that warns
+        # of nothing. This project assumes a dedicated account, where account-wide
+        # IS the project. To scope a shared account, activate the Project tag and
+        # add: CostFilters: { TagKeyValue: ["user:Project$<name>"] } (see COST.md).
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: !Ref AlertThresholdPercent
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: SNS
+              Address: !Ref CostTopic
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: SNS
+              Address: !Ref CostTopic
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: SNS
+              Address: !Ref CostTopic
+
+  # ===========================================================================
+  # Cost Anomaly Detection — the control for the spend you did NOT think to
+  # budget for. A budget catches "too much in total"; an anomaly monitor catches
+  # "this service's spend suddenly looks nothing like it usually does" — a Spot
+  # instance that failed to stop, a loop that will not stop calling Bedrock, a
+  # forgotten NAT gateway. It is free, and it is the FinOps control that most
+  # directly matches this platform's failure modes.
+  # ===========================================================================
+  AnomalyMonitor:
+    Type: AWS::CE::AnomalyMonitor
+    Condition: WithAnomalyDetection
+    Properties:
+      MonitorName: !Sub "${ProjectName}-${Environment}-service-monitor"
+      # Per-SERVICE monitoring: an anomaly in EC2, or Bedrock, or S3 is flagged
+      # against that service, so the alert names what got expensive.
+      MonitorType: DIMENSIONAL
+      MonitorDimension: SERVICE
+
+  AnomalySubscription:
+    Type: AWS::CE::AnomalySubscription
+    Condition: WithAnomalyDetection
+    # The topic policy must exist before Cost Anomaly Detection will accept the
+    # SNS subscriber, or the create fails validating it can publish.
+    DependsOn: CostTopicPolicy
+    Properties:
+      SubscriptionName: !Sub "${ProjectName}-${Environment}-anomaly-sub"
+      MonitorArnList:
+        - !Ref AnomalyMonitor
+      # IMMEDIATE is the only frequency valid for an SNS subscriber (email uses
+      # DAILY/WEEKLY digests). We want the page the moment an anomaly is detected.
+      Frequency: IMMEDIATE
+      Subscribers:
+        - Type: SNS
+          Address: !Ref CostTopic
+      # Only alert when the anomaly's total dollar impact clears the threshold —
+      # the modern replacement for the deprecated flat Threshold field.
+      ThresholdExpression: !Sub >-
+        {"Dimensions":{"Key":"ANOMALY_TOTAL_IMPACT_ABSOLUTE","MatchOptions":["GREATER_THAN_OR_EQUAL"],"Values":["${AnomalyThresholdUsd}"]}}
+
+  # ===========================================================================
+  # A CloudWatch billing alarm on the account's estimated charges. Belt to the
+  # budget's braces, and the one signal that lands in the same CloudWatch console
+  # as every other alarm. NOTE: the AWS/Billing metric is published only in
+  # us-east-1, so this alarm is meaningful only when the stack is deployed there
+  # (which is the project default). Elsewhere it simply never leaves INSUFFICIENT_DATA.
+  # ===========================================================================
+  EstimatedChargesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-estimated-charges"
+      AlarmDescription: >-
+        Account estimated charges have crossed the monthly budget. A coarse,
+        account-wide backstop to the tag-scoped budget.
+      Namespace: AWS/Billing
+      MetricName: EstimatedCharges
+      Dimensions:
+        - Name: Currency
+          Value: USD
+      Statistic: Maximum
+      # Billing metrics update a few times a day; a 6-hour period matches their
+      # cadence without alarming on every refresh.
+      Period: 21600
+      EvaluationPeriods: 1
+      Threshold: !Ref MonthlyBudgetUsd
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref CostTopic]
+      OKActions: [!Ref CostTopic]
+
+Outputs:
+  CostTopicArn:
+    Description: SNS topic every cost signal publishes to. Subscribe to receive alerts.
+    Value: !Ref CostTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-CostTopicArn"
+
+  MonthlyBudgetName:
+    Description: The monthly cost budget's name.
+    Value: !Sub "${ProjectName}-${Environment}-monthly"
+
+  AnomalyMonitorArn:
+    Condition: WithAnomalyDetection
+    Description: ARN of the Cost Anomaly Detection monitor.
+    Value: !Ref AnomalyMonitor
