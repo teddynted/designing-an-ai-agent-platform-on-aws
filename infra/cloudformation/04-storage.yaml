@@ -87,6 +87,18 @@ Resources:
             Status: Enabled
             AbortIncompleteMultipartUpload:
               DaysAfterInitiation: 7
+          # Move objects to S3 Intelligent-Tiering on write (Milestone 15). It is
+          # the correct default for generated artifacts whose access pattern is
+          # unknown: S3 moves an object between frequent- and infrequent-access
+          # tiers automatically, with NO retrieval fees, so a re-read is never a
+          # surprise charge. Objects under 128 KB are never auto-tiered and never
+          # incur the small monitoring fee, so tiny artifacts cost exactly what
+          # they did before — this rule only ever saves money, never adds it.
+          - Id: intelligent-tiering
+            Status: Enabled
+            Transitions:
+              - StorageClass: INTELLIGENT_TIERING
+                TransitionInDays: 0
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-artifacts"
