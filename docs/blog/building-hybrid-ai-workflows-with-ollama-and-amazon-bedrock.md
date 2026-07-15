@@ -365,7 +365,7 @@ them without pretending to implement them:
   Vertex AI client — are each one `llm.Provider` and one `case`. The routing layer does not move.
 - **Policy-based routing and multi-model ensembles** are, again, strategies — the constraint gate
   and the fallback executor are the parts that would stay.
-- **Monitoring** (Milestone 15) already has its raw material: every routing decision logs its
+- **Monitoring** (Milestone 13) already has its raw material: every routing decision logs its
   reason, who was chosen, who actually answered, and whether it was a fallback.
 
 Two models, one interface, chosen per request — with the cheap work staying home on hardware

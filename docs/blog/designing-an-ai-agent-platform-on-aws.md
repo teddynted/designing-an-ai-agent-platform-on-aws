@@ -705,9 +705,9 @@ Everything above is the foundation the following milestones build on, in order:
 | **Infrastructure** | M2 · CloudFormation · M3 · EC2 Spot · M4 · Custom AMIs |
 | **Workloads** | M5 · n8n · M6 · OpenClaw |
 | **Inference & routing** | M7 · Ollama · M8 · Bedrock · M9 · Claude · M10 · Hybrid Routing |
-| **Agent behaviour** | M11 · Loop Engineering · M12 · GitHub Webhooks · M13 · Blog Generator · M14 · Publishing |
-| **Production readiness** | M15 · Monitoring · M16 · Security · M17 · CI/CD · M18 · Cost · M19 · Scalability |
-| **Beyond** | M20 · Future Extensions · then MCP Integration |
+| **Agent behaviour & operations** | M11 · Loop Engineering · M12 · GitHub Webhooks · M13 · Monitoring |
+| **Production readiness** | M14 · Security · M15 · Cost · M16 · Scalability |
+| **Beyond** | M17 · Future Extensions · then MCP Integration |
 
 The full roadmap, with an objective and expected outcome for every milestone, is
 in the [project README](../../README.md#roadmap). Each milestone is intended to

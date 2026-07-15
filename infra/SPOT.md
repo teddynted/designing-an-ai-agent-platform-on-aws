@@ -572,7 +572,7 @@ Full teardown is `make delete` (the artifact bucket is retained by design).
 | The drain agent is not running | `systemctl status spot-drain`. It runs on every instance, including On-Demand ones (where the IMDS path simply 404s forever — harmless). |
 | A misrouted-event error in the logs | A rule points at the wrong function. That is a deployment bug, and it is loud on purpose: the correct function is not seeing the event. |
 | The instance restarts itself after a manual stop | Expected for a **persistent** Spot request (`SpotInterruptionBehavior=stop`) — that *is* the interruption-recovery behaviour. See [SCHEDULER.md](SCHEDULER.md). |
-| Interruptions are constant | The instance type is scarce in that AZ. The interruption rate is a property of the type — check the `InterruptionWarnings` metric per `InstanceType`, and pick a less contended type. Flexibility across types and AZs is the real fix, and it needs an Auto Scaling group (Milestone 19). |
+| Interruptions are constant | The instance type is scarce in that AZ. The interruption rate is a property of the type — check the `InterruptionWarnings` metric per `InstanceType`, and pick a less contended type. Flexibility across types and AZs is the real fix, and it needs an Auto Scaling group (Milestone 16). |
 
 ### No Spot capacity
 
@@ -613,7 +613,7 @@ Three ways out, in increasing order of how much they actually fix:
    notice path simply never fires.
 3. **Diversify.** Several instance types across several AZs, with the
    `capacity-optimized` allocation strategy, behind an **Auto Scaling group**.
-   This is the only real answer, and it is Milestone 19. The compute stack
+   This is the only real answer, and it is Milestone 16. The compute stack
    already provisions through a launch template precisely so that this is a
    change of container, not a rewrite.
 

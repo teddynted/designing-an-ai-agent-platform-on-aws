@@ -199,6 +199,21 @@ Resources:
                   - logs:PutLogEvents
                 Resource:
                   - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-webhook:*"
+        - PolicyName: tracing
+          # Active tracing (below) is the Milestone-13 X-Ray integration for the
+          # platform's one Lambda it fully owns. The two write actions take no
+          # resource ARN — the API only accepts "*" — and grant write-only
+          # telemetry, not data access. Without them, active tracing silently
+          # produces no segments.
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteXRay
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-webhook-lambda-role"
@@ -221,6 +236,13 @@ Resources:
       Timeout: !Ref LambdaTimeoutSeconds
       MemorySize: 128
       Role: !GetAtt WebhookRole.Arn
+      # Active tracing (Milestone 13): the Lambda service emits a service-boundary
+      # segment for every invocation, and sets _X_AMZN_TRACE_ID so the handler's
+      # structured logs can carry the same trace ID (see internal/observability's
+      # TraceIDFrom). It traces this function; it cannot trace INTO n8n or an agent,
+      # which are separate deployments — see OBSERVABILITY.md on where tracing stops.
+      TracingConfig:
+        Mode: Active
       Code:
         S3Bucket: !Ref LambdaCodeBucket
         S3Key: !Ref WebhookCodeKey
@@ -269,7 +291,7 @@ Resources:
 
   # A basic health alarm: the Lambda erroring means authentic, wanted events are
   # failing to publish (the only thing that returns a 5xx). Deeper dashboards are
-  # Milestone 15; this is the one alarm that should exist from day one.
+  # Milestone 13; this is the one alarm that should exist from day one.
   WebhookErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:

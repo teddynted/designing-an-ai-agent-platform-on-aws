@@ -154,7 +154,7 @@ type. That is zero capacity flexibility *by construction*, and no amount of
 interruption handling repairs it — interruption handling protects your **work**,
 not your **ability to launch**. The real answer is diversification across types
 and AZs, which is a fleet-level property, and the reason
-[Milestone 19](#what-comes-next) exists.
+[Milestone 16](#what-comes-next) exists.
 
 ### One-time vs persistent requests
 
@@ -692,7 +692,7 @@ policy** — several instance types, several AZs, `capacity-optimized` allocatio
 which turns "the instance was interrupted" into "a replacement is already
 running", and makes the capacity problem disappear behind diversification.
 
-That is Milestone 19, and it is deferred on purpose: it is a scalability change,
+That is Milestone 16, and it is deferred on purpose: it is a scalability change,
 not a cost change, and mixing the two would have hidden this milestone's actual
 lesson behind a much larger diff. Milestone 2 already provisions the instance
 through a **launch template** — which is precisely so that dropping it behind an

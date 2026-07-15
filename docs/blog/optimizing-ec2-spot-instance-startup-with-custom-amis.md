@@ -705,7 +705,7 @@ Two things deliberately left undone, and worth naming so the gaps are explicit:
 - **Auto Scaling.** This platform still runs exactly one instance. A fast-booting
   image is what makes an Auto Scaling group with a mixed-instances policy *work* —
   it is the difference between "the interrupted instance is replaced in four
-  minutes" and "in forty seconds". Milestone 19 collects that debt, and the launch
+  minutes" and "in forty seconds". Milestone 16 collects that debt, and the launch
   template has been sitting there since Milestone 2 waiting for it.
 
 Until then: the instance boots in seconds, the boot cannot fail on a download, and

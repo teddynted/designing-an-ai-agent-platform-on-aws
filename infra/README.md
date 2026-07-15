@@ -434,7 +434,7 @@ coin-toss, not a fix.
 
 The real fix is diversification: several instance types across several AZs, with
 the `capacity-optimized` allocation strategy. That needs an **Auto Scaling group**
-and is deliberately deferred to Milestone 19 — the compute stack already
+and is deliberately deferred to Milestone 16 — the compute stack already
 provisions through a launch template so that it is a drop-in change when it
 arrives. See [SPOT.md](SPOT.md#troubleshooting).
 

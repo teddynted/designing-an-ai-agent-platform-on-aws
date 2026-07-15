@@ -324,7 +324,7 @@ internet**. The agent reaches out — to model APIs and to GitHub — through a 
 gateway for egress, and to AWS services such as Bedrock and S3 through VPC
 endpoints that keep that traffic off the public internet. This is the boundary
 that turns "an agent with a shell" from a liability into a contained one; it is
-developed fully in [Milestone 16 — Security](../blog/designing-an-ai-agent-platform-on-aws.md#security-considerations).
+developed fully in [Milestone 14 — Security](../blog/designing-an-ai-agent-platform-on-aws.md#security-considerations).
 
 ---
 
