@@ -10,7 +10,8 @@
 [![Milestone 7](https://img.shields.io/badge/M7%20Ollama-shipped-brightgreen)](docs/blog/running-local-llms-with-ollama-on-aws.md)
 [![Milestone 8](https://img.shields.io/badge/M8%20Bedrock-shipped-brightgreen)](docs/blog/adding-amazon-bedrock-to-an-ai-agent-platform.md)
 [![Milestone 9](https://img.shields.io/badge/M9%20Claude-shipped-brightgreen)](docs/blog/integrating-claude-into-an-ai-agent-platform.md)
-[![Next milestone](https://img.shields.io/badge/next-M10%20Hybrid%20Routing-lightgrey)](#milestone-10--hybrid-ai-routing)
+[![Milestone 10](https://img.shields.io/badge/M10%20Hybrid%20Routing-shipped-brightgreen)](docs/blog/building-hybrid-ai-workflows-with-ollama-and-amazon-bedrock.md)
+[![Next milestone](https://img.shields.io/badge/next-M11%20Loop%20Engineering-lightgrey)](#milestone-11--loop-engineering)
 [![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-blue)](https://semver.org/spec/v2.0.0.html)
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-blue)](https://www.conventionalcommits.org/en/v1.0.0/)
 
@@ -25,8 +26,11 @@
 > ever leaving the network — **or** Amazon Bedrock, switched by one environment variable —
 > and, through Bedrock, let **Claude use the platform's own tools**: it can trigger a
 > workflow and hand work to an agent, inside a bounded loop that knows the difference
-> between a retry that is safe and one that would run the workflow twice. Everything from
-> [Milestone 10](#milestone-10--hybrid-ai-routing) on is still a statement of intent. See [What exists today](#what-exists-today), which is
+> between a retry that is safe and one that would run the workflow twice — and it can run
+> **both** providers at once, [routing each request](ROUTING.md) to the local model or to
+> Bedrock, with fallback when one is down and a hard refusal to let a private prompt leave
+> the network. Everything from
+> [Milestone 11](#milestone-11--loop-engineering) on is still a statement of intent. See [What exists today](#what-exists-today), which is
 > kept honest.
 
 An open design study and reference implementation for running **autonomous AI
@@ -50,6 +54,7 @@ on a repository, and how to keep the bill and the blast radius small.
 - [Local inference with Ollama](#local-inference-with-ollama)
 - [Managed inference with Amazon Bedrock](#managed-inference-with-amazon-bedrock)
 - [Claude, and a model that can act](#claude-and-a-model-that-can-act)
+- [Hybrid routing between local and managed models](#hybrid-routing-between-local-and-managed-models)
 - [Technology Stack](#technology-stack)
 - [Repository Scope](#repository-scope)
 - [Related Repositories](#related-repositories)
@@ -123,7 +128,7 @@ Being explicit, because everything else on this page is aspirational:
 | Inference (Ollama) + provider abstraction | ✅ **Implemented** | [Milestone 7](#milestone-7--ollama-integration): the platform runs **its own** single-shot inference on a local model, behind a provider interface. *(The **agent's** model calls are still the agent's, behind its boundary — see [the correction](INFERENCE.md#wait--milestone-6-said-the-platform-calls-no-model).)* See [INFERENCE.md](INFERENCE.md) |
 | Managed inference (Amazon Bedrock) | ✅ **Implemented** | [Milestone 8](#milestone-8--amazon-bedrock-integration): a **second** provider behind the same interface, switched by `LLM_PROVIDER` — no caller changed. IAM auth, model-scoped least privilege, throttling as its own error kind. See [INFERENCE.md](INFERENCE.md) |
 | Claude: reasoning, structured output, **tool use** | ✅ **Implemented** | [Milestone 9](#milestone-9--claude-integration): the model can be held to a **schema**, and can **call the platform's own tools** — trigger a workflow, hand work to an agent — inside a bounded loop. It is why "a retry is safe here" [had to be withdrawn](INFERENCE.md#a-retry-was-safe-here--milestone-9-withdrew-that). See [INFERENCE.md](INFERENCE.md) |
-| Hybrid routing | 📋 Planned | [Milestone 10](#milestone-10--hybrid-ai-routing). `Capabilities` now says what a model **can do**, not just what it costs — so the router must be capability-aware, or it will route a schema to a model that cannot produce one |
+| Hybrid routing | ✅ **Implemented** | [Milestone 10](#milestone-10--hybrid-ai-routing): a router that **is** an `llm.Provider`, choosing Ollama or Bedrock **per request** by purpose and capability, with health-aware fallback, a `RequireLocal` constraint the prompt cannot escape, and three retries it structurally refuses (a spoken stream, a committed effect, a live conversation). No caller changed. See [ROUTING.md](ROUTING.md) |
 | Every integration below | 📋 Planned | Not built |
 
 The infrastructure is real and deployable. **No AI agent runs on it yet**: the
@@ -145,16 +150,17 @@ managed backstop are still ahead.
   plane, and a stateless inference plane, each sized and priced independently.
 - **Hybrid AI routing** — one abstraction over local models, Amazon Bedrock, and
   the Claude API, choosing a provider per request by cost, latency, and
-  capability. *(Most of the way there: the [abstraction exists](#local-inference-with-ollama),
-  and **both Ollama and [Bedrock](#managed-inference-with-amazon-bedrock) implement it** —
-  switched by one environment variable. Since [M9](#claude-and-a-model-that-can-act) the
-  providers also differ in what they **can do**, not just what they cost. The **choosing**,
-  per request, is Milestone 10.)*
+  capability. *([Built in M10](ROUTING.md): the [abstraction exists](#local-inference-with-ollama),
+  **both Ollama and [Bedrock](#managed-inference-with-amazon-bedrock) implement it**, and a
+  router that is itself an `llm.Provider` now **chooses per request** — by purpose and by
+  what each model can do — with health-aware fallback. Cost- and latency-aware strategies
+  are later milestones; the seam they plug into is here.)*
 - **Spot-first inference** — GPU capacity on EC2 Spot, with a managed backstop so
   an interruption degrades latency rather than availability. *(The Spot half is
-  [built](#cost-optimization-with-ec2-spot) and the managed backstop
-  [now exists](#managed-inference-with-amazon-bedrock); the GPU, and **failing over**
-  between them automatically, are Milestone 10.)*
+  [built](#cost-optimization-with-ec2-spot), the managed backstop
+  [exists](#managed-inference-with-amazon-bedrock), and [M10](ROUTING.md) **fails over
+  between them automatically** when a provider is down. The GPU instance itself is
+  deployed by `ollama-on-aws`.)*
 - **Self-hosted workflow orchestration** — n8n as the durable orchestrator between
   events, agents, and the outside world. *(The platform's side of this is
   [built](#workflow-orchestration-with-n8n): it can trigger, authenticate, retry and
@@ -423,7 +429,8 @@ Deliberately **not** built in this milestone, and each is its own piece of work:
 - **Alarms on the interruption rate**, not just metrics — and a dashboard.
   *(Milestone 15.)*
 - **A managed fallback** so interactive inference can survive an interruption
-  by failing over to Bedrock. *(Milestone 10.)*
+  by failing over to Bedrock. *(Built in [Milestone 10](ROUTING.md) — the router fails
+  over when a provider is down.)*
 - **Spot placement scores** to pick the least contended AZ before launching.
 
 ## Startup optimization with custom AMIs
@@ -1269,6 +1276,84 @@ go run ./cmd/llm prompts     # the catalogue
 | **Ollama** (M7) | **Local inference** — the prompt never leaves | The same interface. It reports `Tools: false`, so the platform **refuses** to ask it for what only Claude can do |
 | **Bedrock** (M8) | **Managed model serving** — IAM, no credential | The transport Claude arrives through. Claude is a `BEDROCK_MODEL_ID`, not a new provider |
 
+## Hybrid routing between local and managed models
+
+**Milestone 10.** The platform stops choosing one provider per deployment. It runs
+**both** Ollama and Bedrock and picks between them **per request** — cheap-and-local for a
+summary, frontier-and-hosted for reasoning, and **local-only** for a private prompt that
+must not leave the network.
+
+> 📄 [Building Hybrid AI Workflows with Ollama and Amazon Bedrock](docs/blog/building-hybrid-ai-workflows-with-ollama-and-amazon-bedrock.md) — the blog post ·
+> 📐 [Diagrams](docs/architecture/router-diagrams.md) ·
+> 🛠️ [ROUTING.md](ROUTING.md) — the reference
+
+```bash
+LLM_PROVIDER=router
+LLM_ROUTER_PROVIDERS=ollama,bedrock
+LLM_ROUTER_STRATEGY=purpose
+LLM_ROUTER_RULES=release-notes=bedrock,diff-summary=ollama
+
+go run ./cmd/llm route                                # the routing table + a health probe
+go run ./cmd/llm generate --local --prompt "…"        # refuse any provider that leaves the VPC
+```
+
+### The router IS a provider
+
+The whole milestone is one sentence: `router.Router` implements `llm.Provider` — the same
+interface Ollama and Bedrock do. So it drops into the slot a single client used to occupy,
+and **nothing above it changed**. `llm.Service`, the tool loop, the prompt catalogue, the
+CLI — all still hold one interface and cannot tell there are two models behind it. Milestone
+7 predicted this exact outcome before there was anything to route; the "provider
+abstraction" grew by **four struct fields and one error**.
+
+### A preference bends; a constraint does not
+
+Two request fields decide *where* a request runs, and the difference is the point:
+
+| | | Bends? |
+| --- | --- | --- |
+| `req.Provider = "bedrock"` | a **preference** — "send this one to Bedrock" | ↩︎ gives way if that provider cannot do the job |
+| `req.RequireLocal = true` | a **constraint** — "this prompt may not leave the network" | 🔒 **never** — not by a strategy, not by the default, not by fallback during an outage |
+
+An outage is not a reason to send somebody's source code to a third party. A `RequireLocal`
+request with no local provider available is **refused** (`ErrNoProvider`), never rerouted —
+and the strongest control of all is that `LLM_ROUTER_PROVIDERS=ollama` builds **no Bedrock
+client in the process**, so a prompt cannot reach Bedrock even by a bug.
+
+### Fallback that is affordable, and cannot loop
+
+A managed API and a local GPU do not fail together — Bedrock throttles you when you are
+busiest; the [Spot GPU](#cost-optimization-with-ec2-spot) is reclaimed with two minutes'
+notice — so each is the other's backup. But naïve fallback pays the dead provider's **full
+timeout on every request** (two minutes, three times, on Bedrock's defaults) to rediscover
+an outage it already knew about. So the router has a **circuit breaker** that remembers, and
+it **demotes rather than removes** a failing provider — because a breaker that removes them
+can take the whole platform down from a single DNS blip. The fallback chain is a subset of
+the providers with each appearing **once**, so it cannot loop by construction.
+
+### The three retries it refuses
+
+A router's real danger is a **retry where retrying is unsafe** — and Milestone 9 built three
+such places. The router refuses all three *structurally*, not by trusting an upstream error:
+
+1. **A stream that has emitted a token** — a second provider would send a second beginning.
+   The router counts what reached the caller and will not fail over if anything did,
+   *whatever the error said*.
+2. **A conversation in which a `Write` tool ran** — the workflow already ran;
+   `ErrEffectsCommitted` is terminal.
+3. **A tool-using conversation, ever** — Claude's **signed reasoning block** and Bedrock's
+   tool-call IDs cannot migrate to another model, so a conversation is **pinned** to the
+   provider that started it. Detected from the message history, not a flag someone must
+   remember to set.
+
+### Adding a provider does not touch the router
+
+Amazon Nova, Mistral, an OpenAI client — each is one `llm.Provider` and **one `case`** in
+`internal/providers`. The router reads `llm.Capabilities` (is it local, what does it cost,
+can it use tools), never a package name, so it routes between whatever it is handed. A test
+in `internal/architecture_test.go` fails the build if the router ever imports a vendor — so
+"add a provider without changing the routing layer" stays true rather than aspirational.
+
 ## Technology Stack
 
 Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
@@ -1283,6 +1368,7 @@ Planned. Chosen at Milestone 1 and revisited as the roadmap proceeds.
 | Local inference | Ollama | [M7](#milestone-7--ollama-integration) |
 | Managed inference | Amazon Bedrock | [M8](#milestone-8--amazon-bedrock-integration) |
 | Frontier inference | Claude API | [M9](#milestone-9--claude-integration) |
+| Hybrid provider routing | The provider abstraction (Ollama + Bedrock) | [M10](#milestone-10--hybrid-ai-routing) |
 | Automation | GitHub webhooks and Actions | [M12](#milestone-12--github-webhook-automation) |
 | Observability | Amazon CloudWatch | [M15](#milestone-15--monitoring--observability) |
 | Release tooling | Go (standard library only) | ✅ implemented |
@@ -1582,7 +1668,7 @@ flowchart TB
   retry semantics, no caller touched. The IAM policy is model-scoped and grants **nothing**
   by default. No unit test touches AWS.
   *Automatic **failover** between providers — the Spot GPU vanishes and Bedrock picks up the
-  request — needs a router, and that is Milestone 10.*
+  request — needs a router, and that arrived in [Milestone 10](ROUTING.md).*
 
 #### Milestone 9 — Claude Integration
 
@@ -1611,12 +1697,21 @@ flowchart TB
 
 #### Milestone 10 — Hybrid AI Routing
 
-- **Objective** — Choose a provider per request rather than per deployment.
-- **Primary focus** — Routing on cost, latency, capability, and availability;
-  making the provider a seam in practice, not just in principle.
-- **Related technologies** — The provider abstraction, all three model backends.
-- **Expected outcome** — One interface, three backends, and a routing policy that
-  can be reasoned about and changed without redeploying agents.
+- **Status** — ✅ **Shipped.** Code in [`internal/router`](internal/router);
+  reference in [ROUTING.md](ROUTING.md); the walkthrough is the blog post,
+  [Building Hybrid AI Workflows with Ollama and Amazon Bedrock](docs/blog/building-hybrid-ai-workflows-with-ollama-and-amazon-bedrock.md).
+- **Objective** — Choose a provider **per request** rather than per deployment.
+- **Primary focus** — A router that is itself an `llm.Provider`, so the seam is real in
+  practice and not just in principle: it routes by purpose and capability, falls back on a
+  health circuit breaker, and never learns which providers exist.
+- **Related technologies** — The provider abstraction, Ollama, Amazon Bedrock (Claude).
+- **Outcome** — One interface, a fleet behind it, and a routing policy changed by
+  environment variable without redeploying anything. A `RequireLocal` constraint no
+  strategy, outage, or fallback can trade away; and three retries the router refuses
+  structurally — a stream that has spoken, an effect already committed, and a tool-using
+  conversation whose signed reasoning cannot migrate to another model.
+  *This milestone collected the bet Milestone 7 made: the "provider abstraction" grew by
+  four struct fields and one error, and no caller changed.*
 
 ### Phase 4 — Agent behaviour and automation
 

@@ -29,6 +29,9 @@ package internal_test
 import (
 	"go/build"
 	"testing"
+
+	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/llm"
+	"github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/router"
 )
 
 const module = "github.com/teddynted/designing-an-ai-agent-platform-on-aws/internal/"
@@ -187,7 +190,7 @@ func TestOnlyTheFactoryKnowsAboutMoreThanOneVendor(t *testing.T) {
 		vendors[module+seam.client] = true
 	}
 
-	for _, pkg := range []string{"llm", "workflow", "agent", "httpx"} {
+	for _, pkg := range []string{"llm", "workflow", "agent", "httpx", "router"} {
 		deps := transitiveImports(t, module+pkg)
 
 		var found []string
@@ -268,6 +271,74 @@ func TestTheInferencePlaneDoesNotKnowWhatAToolDoes(t *testing.T) {
 				"core (workflow.Service, agent.Service), not reach past it to a vendor", vendor)
 		}
 	}
+}
+
+// TestTheRouterDoesNotKnowWhichProvidersExist is Milestone 10's seam, and it is the one the
+// whole milestone is actually claiming.
+//
+// The claim is: *adding a provider does not change the routing layer.* Amazon Nova, Mistral,
+// an OpenAI client — each is a new implementation of llm.Provider and one new case in
+// internal/providers, and the router, the service, the tool loop and every caller are
+// untouched.
+//
+// That claim is cheap to make in a README and expensive to be wrong about, so it is a test.
+// And the way it would be broken is not by a bad architect; it is by a good engineer in a
+// hurry. The router needs to know Bedrock supports tools and Ollama does not — the fact is
+// RIGHT THERE in internal/bedrock — and one import gets it. It compiles. Every other test
+// passes. And the routing layer now cannot be built without the AWS SDK, cannot be tested
+// without stubbing Bedrock, and cannot route to a provider that does not exist yet.
+//
+// The correct answer is the one the platform has had since Milestone 7: ask the interface.
+// llm.Capabilities is exactly the set of facts a router needs — is it local, what does it
+// cost, how big is its window, can it call tools — and it is reported BY the provider, so a
+// provider written next year answers the same questions without the router learning its name.
+//
+// internal/router therefore imports internal/llm, and nothing else of ours. The strings
+// "ollama" and "bedrock" appear in that package only inside comments.
+func TestTheRouterDoesNotKnowWhichProvidersExist(t *testing.T) {
+	deps := transitiveImports(t, module+"router")
+
+	for _, vendor := range []string{"ollama", "bedrock", "n8n", "openclaw"} {
+		if deps[module+vendor] {
+			t.Errorf("internal/router imports internal/%s.\n\n"+
+				"The router must not know which providers exist. It is handed a map of llm.Provider\n"+
+				"by internal/providers and routes between whatever it is given — which is the ONLY\n"+
+				"reason \"add a provider without changing the routing layer\" is true rather than\n"+
+				"aspirational.\n\n"+
+				"Whatever fact you need about a provider (can it use tools? is it local? what does it\n"+
+				"cost?), llm.Capabilities already reports it, and a provider written next year will\n"+
+				"report it too — which a switch on a vendor's package name cannot.", vendor)
+		}
+	}
+
+	// And the router must not have grown a private vocabulary. It speaks llm's errors —
+	// llm.ErrNoProvider, llm.ErrStreamBroken — so that a caller classifying a failure with
+	// llm.Kind() gets the same answer whether it was routed or not.
+	if !deps[module+"llm"] {
+		t.Error("internal/router does not import internal/llm — it is supposed to IMPLEMENT " +
+			"llm.Provider and speak that package's errors, not invent its own")
+	}
+
+	// The factory must genuinely reach the router, or "LLM_PROVIDER=router" is a claim with
+	// nothing behind it.
+	if factoryDeps := transitiveImports(t, module+factory); !factoryDeps[module+"router"] {
+		t.Errorf("internal/%s does not import internal/router — it is supposed to be the one place "+
+			"that can build any configured provider, and the router is one of them", factory)
+	}
+}
+
+// TestTheRouterIsAProvider is the one-line version of the whole milestone.
+//
+// Milestone 7 predicted it before there was anything to route: the router "will implement
+// llm.Provider itself and sit exactly where a single provider sits today. Nothing above will
+// notice." This is the compiler agreeing.
+//
+// If it ever stops holding — if the router grows a Route() method that callers must call, or
+// a RoutedResponse that is not an llm.Response — then llm.Service, the tool loop, the prompt
+// catalogue and every CLI would each need to learn that routing exists, and the abstraction
+// would have been paid for and not collected.
+func TestTheRouterIsAProvider(t *testing.T) {
+	var _ llm.Provider = (*router.Router)(nil)
 }
 
 // TestTheInferencePlaneDoesNotKnowWhatYAMLIs guards the last seam Milestone 9 added.

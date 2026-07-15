@@ -33,6 +33,7 @@ it, and they are kept that way on purpose, as the record of a decision:
 | [ollama-diagrams.md](ollama-diagrams.md) | **M7** — inference and the provider abstraction. |
 | [bedrock-diagrams.md](bedrock-diagrams.md) | **M8** — managed inference, and what a second provider did to the abstraction. |
 | [claude-diagrams.md](claude-diagrams.md) | **M9** — a model that can act: tool use, structured output, and the retry rule it broke. |
+| [router-diagrams.md](router-diagrams.md) | **M10** — hybrid routing: the router as a provider, the constraint gate, fallback, and the three retries it refuses. |
 | **this file** | **Everything, as it exists today.** |
 
 ## 1. Runtime architecture

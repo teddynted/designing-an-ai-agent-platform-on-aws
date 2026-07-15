@@ -93,11 +93,37 @@
 // capability that the claim had never been tested against. That is how load-bearing
 // assumptions rot: not by being wrong, but by being outlived.
 //
+// # Milestone 10 changed almost nothing here, and that is the result
+//
+// The router arrived, and this package grew by four fields and one error. It did not
+// grow a Router type, a Strategy interface, a health check or a fallback policy —
+// internal/router has those, and it is *above* this package, implementing [Provider]
+// exactly as Ollama and Bedrock do. Nothing in the platform can tell whether it is
+// holding one provider or five.
+//
+// That is the whole return on the abstraction, collected. Milestone 7 wrote:
+//
+//	A provider abstraction added at Milestone 10, on top of three call sites that each
+//	learned Ollama's JSON shape, is a rewrite. Added now, it is an interface with one
+//	implementation.
+//
+// It was, and this is the invoice. What Milestone 10 *did* need from this package is
+// the vocabulary a router cannot work without: [Request.Provider] (an explicit
+// override), [Request.RequireLocal] (the constraint that must never be traded away),
+// [Response.Provider] (who actually answered — without which every log line says
+// `router` and no bill can be explained), and [ErrNoProvider].
+//
 // # The other one that will bite you
 //
 // Once a stream has emitted a token, it can no longer be retried. The caller has
 // already seen half an answer; retrying would send them a second beginning. See
 // [Provider.Stream].
+//
+// Milestone 10 inherits that rule and one more like it, and both are now the router's
+// problem too: a stream that has emitted a token cannot be FAILED OVER either, and a
+// conversation in which a tool has already run cannot be moved to another provider.
+// See the notes in internal/router — they are the two ways a fallback mechanism
+// quietly turns one answer into two, or one pull request into two.
 package llm
 
 import (
@@ -261,6 +287,24 @@ var (
 	// that fails after a token has escaped is terminal. The caller has to be told that
 	// the world already moved.
 	ErrEffectsCommitted = errors.New("the inference failed after a tool had already changed something")
+
+	// --- added in Milestone 10, by having more than one provider to choose from ---
+
+	// ErrNoProvider means no configured provider can serve this request — and it is a
+	// REFUSAL, not an outage.
+	//
+	// It is the error a router returns when the request asks for something none of the
+	// providers it has can honestly do: tools from a fleet with no tool-using model, a
+	// 100k-token prompt when the only enabled provider has an 8k window, or — the one
+	// that matters most — [Request.RequireLocal] when every enabled provider is hosted.
+	//
+	// It is deliberately NOT ErrUnavailable. Unavailable means "try again, the provider
+	// is broken"; this means "there is nothing here that can do this, and there will not
+	// be until somebody changes the configuration". An alert that collapsed the two would
+	// page an on-call engineer at 3am about an outage that is really a missing
+	// environment variable — and, worse, a retry policy that mistook it for an outage
+	// would sit in a loop asking a fleet of providers to do something none of them can.
+	ErrNoProvider = errors.New("no provider can serve this request")
 )
 
 // Role is who is speaking in a chat-shaped request.
@@ -414,6 +458,43 @@ type Request struct {
 	PromptName     string
 	PromptCategory string
 	PromptVersion  string
+
+	// --- Milestone 10: two fields that look alike and are not ------------------
+	//
+	// Both of these influence WHERE a request runs, and the difference between them is
+	// the most important idea in the routing milestone.
+	//
+	// [Request.Provider] is a PREFERENCE made explicit — "send this one to Bedrock".
+	// [Request.RequireLocal] is a CONSTRAINT — "this prompt may not leave the network".
+	//
+	// A router may bend a preference: if the named provider cannot do the job, saying so
+	// is more useful than pretending. A router may never bend a constraint, because the
+	// thing on the other side of it is not a slower answer or a bigger bill — it is
+	// somebody's source code in a third party's service. Preferences bend; constraints
+	// do not, and no configuration setting may make them.
+
+	// Provider pins this request to one provider by name — "ollama", "bedrock". Empty is
+	// the normal case and means "let the router decide".
+	//
+	// It is a pin, not a hint: a router that is told which provider to use does not fall
+	// back to another when that one is unavailable. Silently serving from somewhere else
+	// is the one thing an override must never do, because a caller who names a provider
+	// would rather have an error than a surprise. If you want "prefer Bedrock, but cope",
+	// that is a routing STRATEGY, and it is configuration rather than a field.
+	Provider string
+
+	// RequireLocal refuses any provider whose inference leaves the network — whatever the
+	// configuration says, whatever the routing strategy prefers, and whether or not
+	// fallback is enabled.
+	//
+	// This is the field that makes hybrid inference safe to use on a private repository.
+	// [Capabilities.Local] has said since Milestone 7 that the question a router must be
+	// able to answer is not "which is cheaper" but "does the prompt LEAVE" — and this is
+	// the request's half of that conversation. A request that sets it can be served by
+	// Ollama or refused, and there is no third outcome. In particular it is NOT satisfied
+	// by falling back to a hosted provider when the local one is down: an outage is not a
+	// reason to send somebody's source code to a third party.
+	RequireLocal bool
 }
 
 // ReasoningConfig turns on extended thinking.
@@ -511,6 +592,15 @@ type Response struct {
 	Duration time.Duration
 	Attempts int
 
+	// Provider is who actually answered — which, from Milestone 10, is not necessarily
+	// who was asked.
+	//
+	// A single provider may leave it empty; there is no ambiguity to resolve. A router
+	// fills it in, and it is the field that makes a log line honest: without it, every
+	// line says `provider=router`, and the one question anybody has when the bill or the
+	// latency looks wrong — *which model actually served this?* — has no answer anywhere.
+	Provider string
+
 	// FinishReason is why generation stopped: "stop", "length", "stop-sequence",
 	// and — new in Milestone 9 — "tool_use".
 	//
@@ -546,6 +636,12 @@ type Sink func(Chunk) error
 // Model is a model the provider has.
 type Model struct {
 	Name string
+
+	// Provider is which provider has it. Empty when only one provider is configured and
+	// the question does not arise; a router sets it, because "llama3.2 and Claude are
+	// both available" is a useless sentence if it does not say where either of them is.
+	Provider string
+
 	// Family is the architecture: "llama", "qwen2", "gemma".
 	Family string
 	// ParameterSize is "7B", "70B" — the number that decides whether this needs a GPU.

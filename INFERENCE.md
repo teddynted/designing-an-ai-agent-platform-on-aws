@@ -105,7 +105,7 @@ and the provider abstraction is listed under "what this repository owns" in the
 | **Amazon Bedrock** (M8) | **Managed model serving.** Deployed by nobody; it is an API. |
 | **`internal/providers`** (M8) | Building the configured provider. The one package that knows both exist. |
 | **Claude** (M9) | A third provider, behind the same interface. |
-| **The router** (M10) | Choosing between them **per request**. |
+| **The router** (M10) | Choosing between them **per request** — and itself an `llm.Provider`. See [ROUTING.md](ROUTING.md). |
 
 ## What a second provider did to the abstraction
 
