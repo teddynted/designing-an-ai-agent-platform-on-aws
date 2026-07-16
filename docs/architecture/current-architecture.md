@@ -45,12 +45,11 @@ it, and they are kept that way on purpose, as the record of a decision:
 ## 1. Runtime architecture
 
 The AWS service view. The hand-authored SVG ([platform-as-built.svg](platform-as-built.svg))
-is a **historical snapshot frozen at Milestone 7** — an internet gateway, a Spot
-instance from a custom AMI, the Spot event Lambdas, and the three integration
-repositories drawn outside the account. It is kept as the record of that stage. For the
-**current** topology — the webhook front door, the router, the work queue, and the
-monitoring, security, and cost planes — the authoritative view is the Mermaid diagram
-below and this file as a whole.
+is a **redrawn snapshot at Milestone 17** — the whole platform on one page, with the
+webhook front door, the router, the work queue, and the monitoring, security, and cost
+planes all present. It is redrawn at milestone boundaries; the Mermaid diagram below is
+the view kept current continuously, so where the two ever disagree, the Mermaid is
+authoritative.
 
 ```mermaid
 flowchart TB
@@ -400,6 +399,8 @@ worse than none — it is a confident lie. When a milestone changes what is depl
 
 Leave the per-milestone diagram files alone. They are snapshots of a decision at a
 point in time, and rewriting them to match the present would destroy the only record
-of why the decision was made. The hand-authored SVGs are snapshots too — the M1
-[target](aws-architecture.svg) and the M7 [as-built](platform-as-built.svg) — and this
-Mermaid view, not the SVG, is the one kept current.
+of why the decision was made. The hand-authored SVGs are the exception the other way:
+the M1 [target](aws-architecture.svg) stays frozen as the aspiration, while the
+[as-built SVG](platform-as-built.svg) is **redrawn at milestone boundaries** (currently
+M17). This Mermaid view is the one kept current continuously, so it — not the SVG — is
+authoritative when they disagree.
