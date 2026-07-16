@@ -294,20 +294,31 @@ scalability models — is documented in the Milestone 1 deliverables:
 - 🗺️ **[AWS architecture diagram](docs/architecture/aws-architecture.svg)** — the AWS service view above (Cloud / Region / VPC / subnets)
 - 📐 **[Architecture diagrams](docs/architecture/diagrams.md)** — the service view plus four Mermaid flow views (high-level, event flow, component interaction, deployment boundaries)
 
-These are design documents from Milestone 1: the diagram above is the **target**,
-and most of it (n8n, OpenClaw, Ollama, Bedrock routing) is still unbuilt.
+These are design documents from Milestone 1: the diagram above is the **target**.
+Through Milestone 17 most of it is now built — the integrations (n8n, OpenClaw, Ollama),
+Bedrock, and per-request routing all exist — with the remaining gaps (a worker fleet,
+MCP, a vector store) named honestly in the living diagram set below.
 
-### What is actually deployed (Milestones 2–4)
+### What is actually deployed (through Milestone 17)
 
-The diagram above is the **target**. This is the **present** — the same AWS service
-view, drawn for what really exists in the account today:
-
-![The platform as built after Milestone 7: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI, with an encrypted root volume deleted on termination; the instance saves artifacts and drained work to S3 and ships its boot and drain logs to CloudWatch; EC2 lifecycle events land on the account default event bus where five EventBridge rules invoke two Go Lambdas that count them and re-publish onto the platform event bus; operators reach the instance only through SSM Session Manager and there is no inbound access; beneath the AWS account, drawn outside it, sit three component repositories the platform integrates with but does not deploy — self-hosted n8n for orchestration, OpenClaw for agentic execution (which calls its own model and whose output is untrusted), and Ollama for local inference, where the prompt never leaves the network; hosted inference and hybrid routing are not built yet.](docs/architecture/platform-as-built.svg)
+The diagram above is the **target**. The **present** now spans thirteen CloudFormation
+stacks: the same disposable Spot instance, plus a non-blocking webhook front door (M12),
+a router that chooses a provider per request (M10), a work queue that decouples
+long-running tasks from orchestration (M16), and the monitoring (M13), security (M14),
+and cost (M15) planes — with an autonomous loop controller (M11) and a test-enforced
+extension model (M17) in the Go layers. The authoritative, always-current view is the
+**living diagram set**, kept as Mermaid so it never drifts:
 
 > 🗺️ **[The Platform As Built](docs/architecture/current-architecture.md)** — the
-> living diagram set (runtime topology, stack map, the life of one instance),
-> updated every milestone. The gap between it and the target above is the roadmap,
-> and it is deliberately visible.
+> living diagram set (runtime topology, stack map, the life of one instance, and what
+> each milestone added), updated every milestone and current through M17. The gap
+> between it and the M1 target above is the roadmap, and it is deliberately visible.
+
+The hand-authored SVG below is a **redrawn snapshot at Milestone 17** — the whole
+platform on one page, in the AWS service view. It is redrawn at milestone boundaries;
+the Mermaid diagrams in the living doc above are the version kept current continuously.
+
+![The platform as built through Milestone 17: a GitHub webhook enters a Lambda Function URL that verifies the HMAC signature, filters the event, and publishes to the platform EventBridge bus without blocking on the work; from the bus a dispatch Lambda runs synchronously while an EventBridge rule load-levels long-running agent-task events into an SQS work queue with a dead-letter queue, whose depth is the scaling signal a future worker fleet consumes; compute runs on an EC2 Spot instance in a VPC public subnet with no NAT gateway, launched from a custom AMI, behind a security group whose egress is an allow-list, reaching S3 over a free gateway endpoint and the internet through an internet gateway, with operators connecting only through SSM Session Manager; the Go integration layers run the platform's own inference behind one provider abstraction with Ollama and Amazon Bedrock and a router that chooses between them per request under a local-only constraint, a bounded loop controller, and a tool loop whose write actions are never retried; Amazon Bedrock sits inside the region but outside the VPC as the one path where the prompt leaves the network; a multi-region CloudTrail with a KMS key, CloudWatch dashboards and alarms, and AWS Budgets with Cost Anomaly Detection send to three separate SNS topics for three audiences; and n8n, OpenClaw and Ollama are deployed by their own repositories, not this one.](docs/architecture/platform-as-built.svg)
 
 ## Cost optimization with EC2 Spot
 

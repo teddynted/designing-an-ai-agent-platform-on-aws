@@ -1,339 +1,389 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 1120" font-family="Arial, Helvetica, sans-serif" role="img" aria-label="The AI Agent Platform as built after Milestone 9: an internet gateway fronts a VPC public subnet whose default-deny security group contains an EC2 Spot instance launched from a custom AMI with an encrypted disposable root volume; the instance saves artifacts to S3 and ships logs to CloudWatch; EC2 lifecycle events land on the account default event bus, where five EventBridge rules invoke two Go Lambdas that re-publish onto the platform event bus; operators connect only through SSM Session Manager and there is no inbound access. Amazon Bedrock sits inside the AWS region but outside the VPC, called from the instance over SigV4-signed HTTPS with no stored credential, permitted by an opt-in IAM policy that names the models it may invoke; it is the one path on which the prompt leaves the network and is billed per token. Through Bedrock, Claude can now call the platform's own tools: a bounded tool loop lets the model trigger an n8n workflow and submit an OpenClaw agent task, so the inference plane now points back into the orchestration and agent planes, and an inference can have side effects. The model chooses those actions from an allowlist and never writes the agent's instructions, and a conversation in which a write tool has already run is never retried. Below the account, drawn outside it, sit three component repositories the platform integrates with but does not deploy: n8n for orchestration, OpenClaw for agentic execution, and Ollama for local inference, which is the default provider and cannot use tools. Choosing between providers per request is not built yet.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1520" font-family="Arial, Helvetica, sans-serif" role="img" aria-label="The AI Agent Platform as built through Milestone 17. A GitHub webhook enters a Lambda Function URL that verifies the HMAC signature, filters the event, and publishes a curated event to the platform EventBridge bus without ever blocking on the work. From the bus, a dispatch Lambda runs synchronously while an EventBridge rule load-levels long-running agent-task events into an SQS work queue with a dead-letter queue for poison tasks; queue depth is the scaling signal a future worker fleet consumes. Compute runs on an EC2 Spot instance in a VPC public subnet with no NAT gateway, launched from a custom AMI, behind a security group whose egress is an allow-list; the instance reaches S3 over a free gateway endpoint and the internet through an internet gateway, and operators connect only through SSM Session Manager. The Go integration layers run the platform's own inference behind one provider abstraction with two implementations, Ollama local and Amazon Bedrock managed, and a router that is itself a provider and chooses between them per request under a constraint that a local-only prompt may never leave the network; a bounded loop controller pursues goals, and a tool loop lets the model trigger an n8n workflow or submit an OpenClaw agent task, but a conversation in which a write tool has run is never retried. Amazon Bedrock sits inside the region but outside the VPC and is the one path where the prompt leaves the network, billed per token. A multi-region CloudTrail with its own KMS key records the account, CloudWatch carries dashboards and alarms, and AWS Budgets with Cost Anomaly Detection guard the bill; the three send to three separate SNS topics for three audiences. n8n, OpenClaw and Ollama are deployed by their own repositories, not this one. The extension model of Milestone 17 is architecture only and adds no AWS resource.">
   <defs>
-    <marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L7,3 L0,6 Z" fill="#232F3E"/>
-    </marker>
-    <marker id="ag" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L7,3 L0,6 Z" fill="#7D8998"/>
-    </marker>
-    <marker id="agr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L7,3 L0,6 Z" fill="#3F8624"/>
-    </marker>
-    <marker id="apk" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L7,3 L0,6 Z" fill="#E7157B"/>
-    </marker>
-    <marker id="at" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L7,3 L0,6 Z" fill="#01A88D"/>
-    </marker>
-    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L7,3 L0,6 Z" fill="#B0341D"/>
-    </marker>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#232F3E"/></marker>
+    <marker id="ag" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#7D8998"/></marker>
+    <marker id="agr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#3F8624"/></marker>
+    <marker id="apk" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#E7157B"/></marker>
+    <marker id="asq" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#C2185B"/></marker>
+    <marker id="at" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#01A88D"/></marker>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#B0341D"/></marker>
+    <marker id="aog" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#ED7100"/></marker>
   </defs>
 
-  <rect x="0" y="0" width="1160" height="1120" fill="#FFFFFF"/>
-  <text x="580" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="#232F3E">The Platform As Built — Milestones 2 · 3 · 4 · 5 · 6 · 7 · 8 · 9</text>
-  <text x="580" y="54" text-anchor="middle" font-size="12" fill="#5A6B7B">Eight CloudFormation stacks + an image pipeline, on a live account · one provider abstraction, two implementations — and a model that can now ACT on the platform</text>
+  <rect x="0" y="0" width="1400" height="1520" fill="#FFFFFF"/>
+  <text x="700" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="#232F3E">The Platform As Built — Milestones 2 → 17</text>
+  <text x="700" y="54" text-anchor="middle" font-size="12" fill="#5A6B7B">Thirteen CloudFormation stacks + an image pipeline · a non-blocking webhook front door, a router, a work queue, and the monitoring, security and cost planes</text>
 
-  <!-- Internet -->
-  <rect x="26" y="168" width="76" height="60" rx="10" fill="#6B7785"/>
-  <text x="64" y="205" text-anchor="middle" font-size="22" fill="#fff">&#127760;</text>
-  <text x="64" y="244" text-anchor="middle" font-size="11.5" fill="#232F3E" font-weight="700">Internet</text>
-  <text x="64" y="258" text-anchor="middle" font-size="9.5" fill="#5A6B7B">egress only</text>
+  <!-- ===================== External actors ===================== -->
+  <rect x="24" y="150" width="82" height="58" rx="10" fill="#6B7785"/>
+  <text x="65" y="184" text-anchor="middle" font-size="20" fill="#fff">&#128421;</text>
+  <text x="65" y="224" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">GitHub</text>
+  <text x="65" y="238" text-anchor="middle" font-size="9" fill="#5A6B7B">webhook source</text>
 
-  <!-- Operator -->
-  <rect x="26" y="470" width="76" height="60" rx="10" fill="#6B7785"/>
-  <text x="64" y="508" text-anchor="middle" font-size="22" fill="#fff">&#128100;</text>
-  <text x="64" y="546" text-anchor="middle" font-size="11.5" fill="#232F3E" font-weight="700">Operator</text>
-  <text x="64" y="560" text-anchor="middle" font-size="9.5" fill="#5A6B7B">SSM Session Manager</text>
-  <text x="64" y="574" text-anchor="middle" font-size="9.5" fill="#5A6B7B">no SSH · no key pair</text>
+  <rect x="24" y="470" width="82" height="58" rx="10" fill="#6B7785"/>
+  <text x="65" y="504" text-anchor="middle" font-size="20" fill="#fff">&#128100;</text>
+  <text x="65" y="544" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">Operator</text>
+  <text x="65" y="558" text-anchor="middle" font-size="9" fill="#5A6B7B">SSM · no SSH</text>
 
-  <!-- AWS Cloud -->
-  <rect x="150" y="76" width="988" height="638" rx="12" fill="none" stroke="#232F3E" stroke-width="2"/>
-  <rect x="164" y="90" width="34" height="18" rx="3" fill="#232F3E"/>
-  <text x="181" y="103" font-size="11" fill="#fff" font-weight="700" text-anchor="middle">aws</text>
-  <text x="208" y="104" font-size="14" fill="#232F3E" font-weight="700">AWS Cloud</text>
+  <!-- ===================== AWS Cloud ===================== -->
+  <rect x="132" y="76" width="1240" height="946" rx="12" fill="none" stroke="#232F3E" stroke-width="2"/>
+  <rect x="146" y="90" width="34" height="18" rx="3" fill="#232F3E"/>
+  <text x="163" y="103" font-size="11" fill="#fff" font-weight="700" text-anchor="middle">aws</text>
+  <text x="190" y="104" font-size="14" fill="#232F3E" font-weight="700">AWS Cloud</text>
 
   <!-- Region -->
-  <rect x="172" y="120" width="950" height="580" rx="10" fill="none" stroke="#00A4A6" stroke-width="1.3" stroke-dasharray="6 4"/>
-  <text x="188" y="142" font-size="12" fill="#00838A" font-weight="700">Region — us-east-1</text>
+  <rect x="154" y="120" width="1204" height="888" rx="10" fill="none" stroke="#00A4A6" stroke-width="1.3" stroke-dasharray="6 4"/>
+  <text x="170" y="142" font-size="12" fill="#00838A" font-weight="700">Region — us-east-1</text>
 
-  <!-- ================= VPC ================= -->
-  <rect x="206" y="162" width="426" height="452" rx="9" fill="none" stroke="#8C4FFF" stroke-width="2"/>
-  <text x="222" y="184" font-size="12.5" fill="#6B25E0" font-weight="700">VPC 10.20.0.0/16 · 01-network</text>
+  <!-- ============ Front door (M12) — top band ============ -->
+  <rect x="176" y="156" width="640" height="90" rx="8" fill="#FFF8F0" stroke="#ED7100" stroke-width="1.1" stroke-dasharray="4 3"/>
+  <rect x="186" y="164" width="26" height="15" rx="3" fill="#ED7100"/>
+  <text x="199" y="175.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M12</text>
+  <text x="220" y="176" font-size="10.5" fill="#232F3E" font-weight="700">Event-driven front door — it verifies, filters, and publishes; it never blocks on the work</text>
 
-  <!-- Internet Gateway -->
   <g>
-    <rect x="240" y="196" width="52" height="52" rx="9" fill="#8C4FFF"/>
-    <text x="266" y="229" text-anchor="middle" font-size="18" fill="#fff">&#127760;</text>
-    <text x="304" y="218" font-size="11" fill="#232F3E" font-weight="700">Internet Gateway</text>
-    <text x="304" y="233" font-size="9.5" fill="#5A6B7B">public route table · no NAT gateway</text>
+    <rect x="196" y="188" width="120" height="48" rx="8" fill="#ED7100"/>
+    <text x="256" y="210" text-anchor="middle" font-size="15" fill="#fff">&#955;</text>
+    <text x="256" y="252" text-anchor="middle" font-size="9.5" fill="#232F3E" font-weight="700">Function URL · 09-webhook</text>
+  </g>
+  <g>
+    <rect x="372" y="188" width="150" height="48" rx="8" fill="#ED7100"/>
+    <text x="447" y="209" text-anchor="middle" font-size="10.5" fill="#fff" font-weight="700">Lambda · webhook</text>
+    <text x="447" y="223" text-anchor="middle" font-size="8.5" fill="#fff">HMAC · filter · publish</text>
+  </g>
+  <g>
+    <rect x="588" y="188" width="120" height="48" rx="8" fill="#E7157B"/>
+    <text x="648" y="209" text-anchor="middle" font-size="10.5" fill="#fff" font-weight="700">Platform bus</text>
+    <text x="648" y="223" text-anchor="middle" font-size="8.5" fill="#fff">05-events</text>
+  </g>
+  <path d="M106,178 C150,180 168,206 192,210" fill="none" stroke="#232F3E" stroke-width="1.6" marker-end="url(#a)"/>
+  <text x="120" y="200" font-size="8.5" fill="#5A6B7B" font-weight="700">webhook · HMAC</text>
+  <line x1="316" y1="212" x2="368" y2="212" stroke="#ED7100" stroke-width="1.5" marker-end="url(#aog)"/>
+  <line x1="522" y1="212" x2="584" y2="212" stroke="#E7157B" stroke-width="1.5" marker-end="url(#apk)"/>
+
+  <!-- ============ Event backbone + dispatch ============ -->
+  <g>
+    <rect x="588" y="286" width="120" height="52" rx="9" fill="#ED7100"/>
+    <text x="648" y="310" text-anchor="middle" font-size="16" fill="#fff">&#955;</text>
+    <text x="648" y="356" text-anchor="middle" font-size="9.5" fill="#232F3E" font-weight="700">dispatch Lambda</text>
+    <text x="648" y="369" text-anchor="middle" font-size="8.5" fill="#5A6B7B">arm64 (M15)</text>
+  </g>
+  <path d="M648,236 L648,282" fill="none" stroke="#E7157B" stroke-width="1.4" marker-end="url(#apk)"/>
+  <text x="656" y="266" font-size="8.5" fill="#B01267">synchronous</text>
+
+  <!-- Default bus + spot handlers (M3), compact -->
+  <rect x="176" y="286" width="380" height="150" rx="8" fill="#FCF3F8" stroke="#E7157B" stroke-width="1" stroke-dasharray="4 3"/>
+  <rect x="186" y="294" width="26" height="15" rx="3" fill="#E7157B"/>
+  <text x="199" y="305.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M3</text>
+  <text x="220" y="306" font-size="10" fill="#232F3E" font-weight="700">Spot interruption plane — the account watches</text>
+  <g>
+    <rect x="196" y="320" width="104" height="46" rx="8" fill="#E7157B"/>
+    <text x="248" y="341" text-anchor="middle" font-size="15" fill="#fff">&#8646;</text>
+    <text x="248" y="381" text-anchor="middle" font-size="9" fill="#232F3E" font-weight="700">Default bus</text>
+    <text x="248" y="393" text-anchor="middle" font-size="8" fill="#5A6B7B">aws.ec2 events</text>
+  </g>
+  <g>
+    <rect x="360" y="320" width="104" height="46" rx="8" fill="#ED7100"/>
+    <text x="412" y="341" text-anchor="middle" font-size="15" fill="#fff">&#955;</text>
+    <text x="412" y="381" text-anchor="middle" font-size="9" fill="#232F3E" font-weight="700">Spot handlers</text>
+    <text x="412" y="393" text-anchor="middle" font-size="8" fill="#5A6B7B">5 rules · 08-spot</text>
+  </g>
+  <line x1="300" y1="343" x2="356" y2="343" stroke="#E7157B" stroke-width="1.4" marker-end="url(#apk)"/>
+  <path d="M464,340 C500,340 512,300 524,260 C532,244 560,232 586,220" fill="none" stroke="#E7157B" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#apk)"/>
+  <text x="470" y="300" font-size="8" fill="#B01267">re-publish → platform bus</text>
+
+  <!-- ============ Work queue (M16) ============ -->
+  <rect x="588" y="410" width="410" height="150" rx="8" fill="#FCE9F1" stroke="#C2185B" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <rect x="598" y="418" width="26" height="15" rx="3" fill="#C2185B"/>
+  <text x="611" y="429.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M16</text>
+  <text x="632" y="430" font-size="10" fill="#232F3E" font-weight="700">Work queue — decouple long-running tasks from orchestration</text>
+  <rect x="598" y="442" width="190" height="28" rx="6" fill="#fff" stroke="#C2185B" stroke-width="1"/>
+  <text x="693" y="460" text-anchor="middle" font-size="9" fill="#232F3E" font-weight="700">rule · detail-type = AgentTaskRequested</text>
+  <g>
+    <rect x="598" y="484" width="120" height="60" rx="9" fill="#C2185B"/>
+    <text x="658" y="512" text-anchor="middle" font-size="17" fill="#fff">&#9776;</text>
+    <text x="658" y="530" text-anchor="middle" font-size="9.5" fill="#fff" font-weight="700">SQS work queue</text>
+  </g>
+  <g>
+    <rect x="760" y="484" width="120" height="60" rx="9" fill="#7D3350"/>
+    <text x="820" y="512" text-anchor="middle" font-size="17" fill="#fff">&#9888;</text>
+    <text x="820" y="530" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">dead-letter queue</text>
+  </g>
+  <text x="912" y="500" font-size="8.5" fill="#8A1E45" font-weight="700">depth / age</text>
+  <text x="912" y="513" font-size="8.5" fill="#8A1E45" font-weight="700">→ alarm (M13)</text>
+  <text x="912" y="533" font-size="8.5" fill="#5A6B7B">consumer =</text>
+  <text x="912" y="545" font-size="8.5" fill="#5A6B7B">future fleet</text>
+  <path d="M648,338 L648,406" fill="none" stroke="#E7157B" stroke-width="1.3" marker-end="url(#apk)"/>
+  <text x="656" y="392" font-size="8.5" fill="#B01267">agent-task events</text>
+  <line x1="693" y1="470" x2="678" y2="480" stroke="#C2185B" stroke-width="1.3" marker-end="url(#asq)"/>
+  <line x1="718" y1="514" x2="756" y2="514" stroke="#7D3350" stroke-width="1.3" marker-end="url(#a)"/>
+  <text x="712" y="478" font-size="8" fill="#8A1E45">poison → DLQ</text>
+
+  <!-- ===================== VPC ===================== -->
+  <rect x="176" y="470" width="386" height="380" rx="9" fill="none" stroke="#8C4FFF" stroke-width="2"/>
+  <text x="192" y="492" font-size="12" fill="#6B25E0" font-weight="700">VPC 10.20.0.0/16 · 01-network · no NAT gateway</text>
+
+  <g>
+    <rect x="196" y="504" width="48" height="48" rx="8" fill="#8C4FFF"/>
+    <text x="220" y="534" text-anchor="middle" font-size="16" fill="#fff">&#127760;</text>
+    <text x="256" y="522" font-size="9.5" fill="#232F3E" font-weight="700">Internet Gateway</text>
+    <text x="256" y="535" font-size="8.5" fill="#5A6B7B">egress allow-list, not open (M14)</text>
+  </g>
+  <g>
+    <rect x="426" y="504" width="48" height="48" rx="8" fill="#8C4FFF"/>
+    <text x="450" y="533" text-anchor="middle" font-size="12" fill="#fff" font-weight="700">S3</text>
+    <text x="486" y="522" font-size="9.5" fill="#232F3E" font-weight="700">S3 gateway endpoint</text>
+    <text x="486" y="535" font-size="8.5" fill="#5A6B7B">free · M14</text>
   </g>
 
   <!-- Public subnet -->
-  <rect x="224" y="268" width="392" height="330" rx="7" fill="#F2F9EE" stroke="#7AA116" stroke-width="1.3" stroke-dasharray="5 3"/>
-  <text x="240" y="288" font-size="11.5" fill="#4E6C0E" font-weight="700">Public subnet · single AZ</text>
+  <rect x="192" y="566" width="354" height="270" rx="7" fill="#F2F9EE" stroke="#7AA116" stroke-width="1.3" stroke-dasharray="5 3"/>
+  <text x="208" y="586" font-size="11" fill="#4E6C0E" font-weight="700">Public subnet · single AZ</text>
 
-  <!-- Security group -->
-  <rect x="242" y="300" width="356" height="282" rx="7" fill="#F4EEFF" stroke="#8C4FFF" stroke-width="1.2" stroke-dasharray="4 3"/>
-  <text x="258" y="320" font-size="11" fill="#6B25E0" font-weight="700">Security group — NO inbound rules</text>
+  <!-- Security group (egress allow-list) -->
+  <rect x="208" y="598" width="322" height="222" rx="7" fill="#F4EEFF" stroke="#8C4FFF" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="224" y="617" font-size="10" fill="#6B25E0" font-weight="700">Security group — no inbound · egress ALLOW-LIST (M14)</text>
 
-  <!-- EC2 Spot -->
   <g>
-    <rect x="288" y="336" width="62" height="62" rx="9" fill="#ED7100"/>
-    <text x="319" y="375" text-anchor="middle" font-size="22" fill="#fff">&#128421;</text>
-    <text x="319" y="414" text-anchor="middle" font-size="11.5" fill="#232F3E" font-weight="700">EC2 Spot</text>
-    <text x="319" y="428" text-anchor="middle" font-size="9.5" fill="#5A6B7B">c5.xlarge · IMDSv2</text>
-    <text x="319" y="441" text-anchor="middle" font-size="9.5" fill="#5A6B7B">~70% off On-Demand</text>
+    <rect x="238" y="632" width="60" height="60" rx="9" fill="#ED7100"/>
+    <text x="268" y="669" text-anchor="middle" font-size="20" fill="#fff">&#128421;</text>
+    <text x="268" y="706" text-anchor="middle" font-size="10.5" fill="#232F3E" font-weight="700">EC2 Spot</text>
+    <text x="268" y="719" text-anchor="middle" font-size="8.5" fill="#5A6B7B">t3.xlarge · IMDSv2</text>
   </g>
-
-  <!-- Root EBS -->
   <g>
-    <rect x="490" y="336" width="62" height="62" rx="9" fill="#3F8624"/>
-    <text x="521" y="375" text-anchor="middle" font-size="20" fill="#fff">&#128190;</text>
-    <text x="521" y="414" text-anchor="middle" font-size="11.5" fill="#232F3E" font-weight="700">Root EBS</text>
-    <text x="521" y="428" text-anchor="middle" font-size="9.5" fill="#5A6B7B">encrypted · gp3</text>
-    <text x="521" y="441" text-anchor="middle" font-size="9.5" fill="#5A6B7B">delete-on-termination</text>
+    <rect x="440" y="632" width="60" height="60" rx="9" fill="#3F8624"/>
+    <text x="470" y="669" text-anchor="middle" font-size="18" fill="#fff">&#128190;</text>
+    <text x="470" y="706" text-anchor="middle" font-size="10.5" fill="#232F3E" font-weight="700">Root EBS</text>
+    <text x="470" y="719" text-anchor="middle" font-size="8.5" fill="#5A6B7B">encrypted · gp3</text>
   </g>
+  <line x1="298" y1="662" x2="436" y2="662" stroke="#3F8624" stroke-width="1.5" marker-end="url(#agr)"/>
+  <text x="367" y="656" text-anchor="middle" font-size="8.5" fill="#2F6417">delete-on-termination</text>
 
-  <!-- EBS attached -->
-  <line x1="352" y1="367" x2="486" y2="367" stroke="#3F8624" stroke-width="1.6" marker-end="url(#agr)"/>
-  <text x="419" y="360" text-anchor="middle" font-size="9.5" fill="#2F6417">root volume</text>
+  <rect x="224" y="736" width="290" height="72" rx="7" fill="#FFF4E6" stroke="#ED7100" stroke-width="1"/>
+  <rect x="234" y="744" width="24" height="14" rx="3" fill="#3F8624"/>
+  <text x="246" y="755" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M4</text>
+  <text x="266" y="755" font-size="9.5" fill="#232F3E" font-weight="700">Custom AMI — boots in 2.5 s (was 76 s)</text>
+  <rect x="234" y="766" width="24" height="14" rx="3" fill="#E7157B"/>
+  <text x="246" y="777" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M3</text>
+  <text x="266" y="777" font-size="9.5" fill="#232F3E" font-weight="700">spot-drain agent — saves work to S3 on notice</text>
+  <text x="234" y="799" font-size="8.5" fill="#5A6B7B">Docker · Go · Node · Python · CloudWatch agent · Ollama</text>
 
-  <!-- What is on the instance -->
-  <rect x="262" y="460" width="316" height="106" rx="7" fill="#FFF4E6" stroke="#ED7100" stroke-width="1.1"/>
-  <rect x="272" y="470" width="26" height="15" rx="3" fill="#3F8624"/>
-  <text x="285" y="481.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M4</text>
-  <text x="306" y="482" font-size="10.5" fill="#232F3E" font-weight="700">Baked into the custom AMI</text>
-  <text x="272" y="498" font-size="9.5" fill="#5A6B7B">Docker · Go · Node · Python · CloudWatch agent</text>
-  <text x="272" y="512" font-size="9.5" fill="#5A6B7B">boots in 6.2 s — UserData only configures</text>
+  <!-- Operator -> EC2 (SSM) -->
+  <path d="M106,500 C150,500 168,600 210,640 C230,658 246,652 260,654" fill="none" stroke="#7D8998" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ag)"/>
+  <text x="112" y="560" font-size="8.5" fill="#5A6B7B">SSM · no open port</text>
 
-  <rect x="272" y="522" width="26" height="15" rx="3" fill="#E7157B"/>
-  <text x="285" y="533.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M3</text>
-  <text x="306" y="534" font-size="10.5" fill="#232F3E" font-weight="700">spot-drain agent</text>
-  <text x="272" y="550" font-size="9.5" fill="#5A6B7B">polls IMDS · on notice: stop work, save to S3</text>
-  <text x="272" y="562" font-size="9.5" fill="#5A6B7B">the 2-minute window belongs to the instance</text>
+  <!-- SQS -> EC2 (future worker poll) -->
+  <path d="M600,540 C560,560 548,600 512,640 C500,652 486,656 476,658" fill="none" stroke="#C2185B" stroke-width="1.3" stroke-dasharray="2 3" marker-end="url(#asq)"/>
+  <text x="512" y="600" font-size="8" fill="#8A1E45">poll (future fleet)</text>
 
-  <!-- ================= Regional services ================= -->
-
-  <!-- Custom AMI -->
+  <!-- ===================== Regional services (right column) ===================== -->
+  <!-- Bedrock -->
   <g>
-    <rect x="672" y="164" width="58" height="58" rx="9" fill="#7AA116"/>
-    <text x="701" y="199" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">AMI</text>
-    <text x="701" y="238" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">Custom AMI</text>
-    <text x="701" y="252" text-anchor="middle" font-size="9.5" fill="#5A6B7B">aiap-platform-v1.0.0</text>
-    <text x="701" y="265" text-anchor="middle" font-size="9.5" fill="#5A6B7B">versioned · immutable</text>
-  </g>
-
-  <!-- Default event bus -->
-  <g>
-    <rect x="856" y="164" width="58" height="58" rx="9" fill="#E7157B"/>
-    <text x="885" y="200" text-anchor="middle" font-size="20" fill="#fff">&#8646;</text>
-    <text x="885" y="238" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">Default event bus</text>
-    <text x="885" y="252" text-anchor="middle" font-size="9.5" fill="#5A6B7B">where aws.ec2 events land</text>
-    <text x="885" y="265" text-anchor="middle" font-size="9.5" fill="#5A6B7B">(a custom bus never would)</text>
-  </g>
-
-  <!-- 5 rules -->
-  <rect x="806" y="292" width="158" height="30" rx="6" fill="#FCE8F2" stroke="#E7157B" stroke-width="1.1"/>
-  <text x="885" y="311" text-anchor="middle" font-size="10.5" fill="#232F3E" font-weight="700">5 EventBridge rules · 08-spot</text>
-
-  <!-- Spot Lambdas -->
-  <g>
-    <rect x="856" y="344" width="58" height="58" rx="9" fill="#ED7100"/>
-    <text x="885" y="382" text-anchor="middle" font-size="22" fill="#fff">&#955;</text>
-    <text x="885" y="418" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">Spot handlers (Go)</text>
-    <text x="885" y="432" text-anchor="middle" font-size="9.5" fill="#5A6B7B">interruption · state-change</text>
-    <text x="885" y="445" text-anchor="middle" font-size="9.5" fill="#5A6B7B">filter by tag · count · re-publish</text>
-  </g>
-
-  <!-- Platform event bus -->
-  <g>
-    <rect x="856" y="484" width="58" height="58" rx="9" fill="#E7157B"/>
-    <text x="885" y="520" text-anchor="middle" font-size="20" fill="#fff">&#8646;</text>
-    <text x="885" y="558" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">Platform event bus</text>
-    <text x="885" y="572" text-anchor="middle" font-size="9.5" fill="#5A6B7B">05-events · the seam for M5+</text>
-    <text x="885" y="585" text-anchor="middle" font-size="9.5" fill="#5A6B7B">→ dispatch Lambda (placeholder)</text>
-  </g>
-
-  <!-- CloudWatch -->
-  <g>
-    <rect x="1024" y="576" width="58" height="58" rx="9" fill="#CD2264"/>
-    <text x="1053" y="614" text-anchor="middle" font-size="20" fill="#fff">&#128200;</text>
-    <text x="1053" y="652" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">CloudWatch</text>
-    <text x="1053" y="666" text-anchor="middle" font-size="9.5" fill="#5A6B7B">logs + Spot metrics</text>
-    <text x="1053" y="679" text-anchor="middle" font-size="9.5" fill="#5A6B7B">interruptions, per instance type</text>
+    <rect x="1040" y="156" width="58" height="58" rx="9" fill="#01A88D"/>
+    <text x="1069" y="193" text-anchor="middle" font-size="20" fill="#fff">&#9673;</text>
+    <rect x="1120" y="160" width="212" height="34" rx="5" fill="#FDECEE" stroke="#DD344C" stroke-width="1"/>
+    <text x="1226" y="174" text-anchor="middle" font-size="8.5" fill="#B02233" font-weight="700">IAM · opt-in, model-scoped</text>
+    <text x="1226" y="186" text-anchor="middle" font-size="8.5" fill="#B02233">grants NOTHING by default</text>
+    <text x="1226" y="212" text-anchor="middle" font-size="10.5" fill="#232F3E" font-weight="700">Amazon Bedrock (M8) — MANAGED, outside the VPC</text>
+    <text x="1069" y="230" text-anchor="middle" font-size="8.5" fill="#B0341D" font-weight="700">prompt LEAVES</text>
+    <text x="1069" y="242" text-anchor="middle" font-size="8.5" fill="#B0341D" font-weight="700">billed / token</text>
   </g>
 
   <!-- S3 -->
   <g>
-    <rect x="672" y="484" width="58" height="58" rx="9" fill="#3F8624"/>
-    <text x="701" y="521" text-anchor="middle" font-size="20" fill="#fff">&#128451;</text>
-    <text x="701" y="558" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">S3 artifact bucket</text>
-    <text x="701" y="572" text-anchor="middle" font-size="9.5" fill="#5A6B7B">versioned · encrypted · TLS-only</text>
-    <text x="701" y="585" text-anchor="middle" font-size="9.5" fill="#5A6B7B">the only durable store</text>
+    <rect x="1040" y="286" width="58" height="58" rx="9" fill="#3F8624"/>
+    <text x="1069" y="323" text-anchor="middle" font-size="19" fill="#fff">&#128451;</text>
+    <text x="1120" y="306" font-size="10.5" fill="#232F3E" font-weight="700">S3 artifact bucket</text>
+    <text x="1120" y="320" font-size="8.5" fill="#5A6B7B">versioned · encrypted · TLS-only</text>
+    <text x="1120" y="333" font-size="8.5" fill="#5A6B7B">Intelligent-Tiering (M15) · the only durable store</text>
   </g>
 
-  <!-- Amazon Bedrock (M8) — inside the Region, OUTSIDE the VPC.
-       Where it is drawn IS the argument: it is the one thing on this diagram the
-       prompt travels to, and the one thing billed per token. -->
+  <!-- CloudWatch (M13) -->
   <g>
-    <rect x="1011" y="164" width="58" height="58" rx="9" fill="#01A88D"/>
-    <text x="1040" y="201" text-anchor="middle" font-size="20" fill="#fff">&#9673;</text>
-
-    <rect x="968" y="232" width="144" height="36" rx="5" fill="#FDECEE" stroke="#DD344C" stroke-width="1.1"/>
-    <text x="1040" y="246" text-anchor="middle" font-size="9" fill="#B02233" font-weight="700">IAM · opt-in, model-scoped</text>
-    <text x="1040" y="259" text-anchor="middle" font-size="9" fill="#B02233">grants NOTHING by default</text>
-
-    <text x="1040" y="288" text-anchor="middle" font-size="11" fill="#232F3E" font-weight="700">Amazon Bedrock (M8)</text>
-    <text x="1040" y="301" text-anchor="middle" font-size="9.5" fill="#5A6B7B">MANAGED · outside the VPC</text>
-    <text x="1040" y="314" text-anchor="middle" font-size="9.5" fill="#B0341D" font-weight="700">the prompt LEAVES</text>
-    <text x="1040" y="327" text-anchor="middle" font-size="9.5" fill="#B0341D" font-weight="700">billed per token</text>
-    <text x="1040" y="345" text-anchor="middle" font-size="9" fill="#00776A" font-weight="700">LLM_PROVIDER=bedrock</text>
+    <rect x="1040" y="360" width="58" height="58" rx="9" fill="#CD2264"/>
+    <text x="1069" y="397" text-anchor="middle" font-size="19" fill="#fff">&#128200;</text>
+    <text x="1120" y="380" font-size="10.5" fill="#232F3E" font-weight="700">CloudWatch (M13)</text>
+    <text x="1120" y="394" font-size="8.5" fill="#5A6B7B">3 dashboards · alarms · EMF metrics</text>
+    <text x="1120" y="407" font-size="8.5" fill="#5A6B7B">health probes · 14-day logs</text>
   </g>
 
-  <!-- ================= Connections ================= -->
+  <!-- CloudTrail (M14) -->
+  <g>
+    <rect x="1040" y="434" width="58" height="58" rx="9" fill="#C7131F"/>
+    <text x="1069" y="471" text-anchor="middle" font-size="18" fill="#fff">&#128220;</text>
+    <text x="1120" y="454" font-size="10.5" fill="#232F3E" font-weight="700">CloudTrail + KMS (M14)</text>
+    <text x="1120" y="468" font-size="8.5" fill="#5A6B7B">multi-region · log-file validation</text>
+    <text x="1120" y="481" font-size="8.5" fill="#5A6B7B">→ S3 + CloudWatch Logs · CIS alarms</text>
+  </g>
 
-  <!-- Internet <-> IGW -->
-  <path d="M102,198 C160,198 190,220 236,222" fill="none" stroke="#232F3E" stroke-width="1.8" marker-end="url(#a)"/>
+  <!-- Budgets (M15) -->
+  <g>
+    <rect x="1040" y="508" width="58" height="58" rx="9" fill="#B26A00"/>
+    <text x="1069" y="545" text-anchor="middle" font-size="18" fill="#fff">&#128178;</text>
+    <text x="1120" y="528" font-size="10.5" fill="#232F3E" font-weight="700">Budgets + Cost Anomaly (M15)</text>
+    <text x="1120" y="542" font-size="8.5" fill="#5A6B7B">forecasted-breach alert · per-service</text>
+    <text x="1120" y="555" font-size="8.5" fill="#5A6B7B">billing alarm</text>
+  </g>
 
-  <!-- IGW -> EC2 -->
-  <path d="M266,250 C266,300 292,312 312,332" fill="none" stroke="#232F3E" stroke-width="1.5" marker-end="url(#a)"/>
-  <text x="238" y="290" font-size="9.5" fill="#5A6B7B">egress</text>
+  <!-- SNS topics — three audiences -->
+  <rect x="1032" y="588" width="308" height="86" rx="8" fill="#F7F9FA" stroke="#D5DBDB" stroke-width="1"/>
+  <text x="1048" y="606" font-size="9.5" fill="#232F3E" font-weight="700">SNS — three topics, three audiences</text>
+  <rect x="1048" y="616" width="88" height="46" rx="7" fill="#CD2264"/>
+  <text x="1092" y="637" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">alarms</text>
+  <text x="1092" y="651" text-anchor="middle" font-size="8" fill="#fff">on-call</text>
+  <rect x="1150" y="616" width="88" height="46" rx="7" fill="#C7131F"/>
+  <text x="1194" y="637" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">security</text>
+  <text x="1194" y="651" text-anchor="middle" font-size="8" fill="#fff">sec team</text>
+  <rect x="1252" y="616" width="80" height="46" rx="7" fill="#B26A00"/>
+  <text x="1292" y="637" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">cost</text>
+  <text x="1292" y="651" text-anchor="middle" font-size="8" fill="#fff">bill payer</text>
+  <line x1="1098" y1="418" x2="1094" y2="612" stroke="#CD2264" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a)"/>
+  <line x1="1069" y1="492" x2="1150" y2="616" stroke="#C7131F" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a)"/>
+  <line x1="1069" y1="566" x2="1280" y2="614" stroke="#B26A00" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a)"/>
 
-  <!-- Operator -> EC2 (SSM reaches inside the security group; that is the point) -->
-  <path d="M102,498 C150,498 172,432 232,412 C254,404 270,388 284,372" fill="none" stroke="#7D8998" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ag)"/>
-  <text x="108" y="452" font-size="9.5" fill="#5A6B7B">SSM · no open port</text>
+  <!-- EC2 -> S3 gateway endpoint -> S3 -->
+  <line x1="450" y1="552" x2="450" y2="628" stroke="#3F8624" stroke-width="1.3" stroke-dasharray="5 3"/>
+  <path d="M476,532 C540,560 560,596 660,596 L940,596 C990,596 1000,430 1010,388 C1016,360 1040,348 1062,346" fill="none" stroke="#3F8624" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#agr)"/>
+  <text x="770" y="588" text-anchor="middle" font-size="8.5" fill="#2F6417" font-weight="700">artifacts · drained work → S3 (via the gateway endpoint)</text>
 
-  <!-- Custom AMI -> EC2: routed BELOW the gateway labels -->
-  <path d="M672,198 C608,216 520,246 472,290 C456,306 450,320 446,332 C428,344 384,338 356,342" fill="none" stroke="#7AA116" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#agr)"/>
-  <text x="498" y="248" font-size="9.5" fill="#4E6C0E" font-weight="700">launched from (AmiId)</text>
+  <!-- EC2 -> Bedrock -->
+  <path d="M298,650 C360,560 520,300 700,250 C860,206 980,200 1036,196" fill="none" stroke="#01A88D" stroke-width="1.4" marker-end="url(#at)"/>
+  <text x="640" y="290" font-size="8.5" fill="#00776A" font-weight="700">SigV4 · instance role · NO stored credential</text>
 
-  <!-- EC2 lifecycle events -> DEFAULT bus: leaves to the right, crossing no label -->
-  <path d="M600,358 C648,338 704,300 786,240 C812,220 832,204 850,194" fill="none" stroke="#E7157B" stroke-width="1.4" marker-end="url(#apk)"/>
-  <text x="664" y="330" font-size="9.5" fill="#B01267" font-weight="700">interruption warning</text>
-  <text x="664" y="343" font-size="9.5" fill="#B01267" font-weight="700">state changes</text>
-
-  <!-- default bus -> rules -> lambdas -->
-  <line x1="885" y1="224" x2="885" y2="288" stroke="#E7157B" stroke-width="1.4" marker-end="url(#apk)"/>
-  <line x1="885" y1="322" x2="885" y2="340" stroke="#E7157B" stroke-width="1.4" marker-end="url(#apk)"/>
-
-  <!-- lambdas -> platform bus -->
-  <line x1="885" y1="452" x2="885" y2="480" stroke="#E7157B" stroke-width="1.4" marker-end="url(#apk)"/>
-  <text x="893" y="470" font-size="9.5" fill="#B01267">re-publish</text>
-
-  <!-- EC2 -> S3 -->
-  <path d="M578,472 C614,478 636,490 668,502" fill="none" stroke="#3F8624" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#agr)"/>
-  <text x="624" y="470" font-size="9.5" fill="#2F6417" font-weight="700">artifacts · drained work</text>
-
-  <!-- EC2 -> CloudWatch: along the empty bottom band, under S3 -->
-  <path d="M578,552 C640,612 820,648 1020,624" fill="none" stroke="#CD2264" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#a)"/>
-  <text x="796" y="620" font-size="9.5" fill="#5A6B7B">boot log · drain log</text>
-
-  <!-- EC2 -> Bedrock: up and over the top band, the only corridor that is free.
-       It leaves the VPC on purpose, and it carries no credential. -->
-  <path d="M596,336 C628,300 640,196 664,166 C676,152 690,150 704,150 L992,150 C1012,150 1024,154 1034,162" fill="none" stroke="#01A88D" stroke-width="1.6" marker-end="url(#at)"/>
-  <text x="716" y="143" font-size="9.5" fill="#00776A" font-weight="700">SigV4 · the instance role · NO stored credential</text>
-
-  <!-- lambdas -> CloudWatch -->
-  <path d="M914,378 C976,420 1004,500 1040,570" fill="none" stroke="#CD2264" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#a)"/>
-  <text x="948" y="470" font-size="9.5" fill="#5A6B7B">metrics</text>
-
-
-  <!-- =========== The boundary with the component repositories ============ -->
-  <!-- n8n and OpenClaw both run on AWS — but NOT this repository's AWS. Drawing
-       them outside the account box is the point of Milestones 5 and 6: this repo
-       owns the contracts, their repositories own the instances. -->
-  <rect x="150" y="736" width="988" height="88" rx="10" fill="#F7F9FA" stroke="#7D8998" stroke-width="1.6" stroke-dasharray="7 4"/>
-  <text x="168" y="756" font-size="12" fill="#5A6B7B" font-weight="700">COMPONENT REPOSITORIES — they own the deployments; this repository owns only the contracts (M5, M6, M7) and creates no AWS resources for any of them</text>
+  <!-- ===================== Go integration layers ===================== -->
+  <rect x="176" y="872" width="1156" height="120" rx="8" fill="#F7F9FA" stroke="#7D8998" stroke-width="1.4" stroke-dasharray="7 4"/>
+  <text x="192" y="892" font-size="11" fill="#5A6B7B" font-weight="700">GO INTEGRATION LAYERS (this repository) — the contracts, not the servers. arrow points INWARD (M17): a core owns each interface, a client implements it, one factory knows the catalogue</text>
 
   <g>
-    <rect x="168" y="766" width="52" height="44" rx="8" fill="#6B7785"/>
-    <text x="194" y="793" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">n8n</text>
+    <rect x="196" y="906" width="150" height="70" rx="8" fill="#fff" stroke="#7D8998" stroke-width="1.1"/>
+    <text x="271" y="926" text-anchor="middle" font-size="9.5" fill="#232F3E" font-weight="700">llm.Service + tool loop</text>
+    <text x="271" y="940" text-anchor="middle" font-size="8" fill="#5A6B7B">M7 · M9 · validate · log</text>
+    <rect x="206" y="948" width="24" height="14" rx="3" fill="#B0341D"/>
+    <text x="218" y="959" text-anchor="middle" font-size="8" fill="#fff" font-weight="700">M9</text>
+    <text x="238" y="959" font-size="8" fill="#B0341D">WRITE tool run → never retried</text>
   </g>
-  <text x="230" y="778" font-size="10" fill="#232F3E" font-weight="700">ORCHESTRATION (M5) · self-hosted-n8n-on-aws</text>
-  <text x="230" y="791" font-size="9" fill="#5A6B7B">What happens, in what order — and the waiting, because it is durable.</text>
-  <text x="230" y="803" font-size="9" fill="#5A6B7B">Idempotency key · payload sanitised before it leaves.</text>
+  <g>
+    <rect x="372" y="906" width="140" height="70" rx="8" fill="#fff" stroke="#7D8998" stroke-width="1.1"/>
+    <text x="442" y="926" text-anchor="middle" font-size="9.5" fill="#232F3E" font-weight="700">internal/providers</text>
+    <text x="442" y="940" text-anchor="middle" font-size="8" fill="#5A6B7B">M8 · the factory</text>
+    <text x="442" y="957" text-anchor="middle" font-size="8" fill="#5A6B7B">LLM_PROVIDER = ollama</text>
+    <text x="442" y="968" text-anchor="middle" font-size="8" fill="#5A6B7B">| bedrock | router</text>
+  </g>
+  <g>
+    <rect x="538" y="906" width="150" height="70" rx="8" fill="#fff" stroke="#7D8998" stroke-width="1.1"/>
+    <text x="613" y="926" text-anchor="middle" font-size="9.5" fill="#232F3E" font-weight="700">internal/router (M10)</text>
+    <text x="613" y="940" text-anchor="middle" font-size="8" fill="#5A6B7B">IS an llm.Provider</text>
+    <text x="613" y="957" text-anchor="middle" font-size="8" fill="#5A6B7B">per-request · constraint gate</text>
+    <text x="613" y="968" text-anchor="middle" font-size="8" fill="#5A6B7B">RequireLocal · fallback</text>
+  </g>
+  <g>
+    <rect x="714" y="906" width="150" height="70" rx="8" fill="#fff" stroke="#7D8998" stroke-width="1.1"/>
+    <text x="789" y="926" text-anchor="middle" font-size="9.5" fill="#232F3E" font-weight="700">internal/loop (M11)</text>
+    <text x="789" y="943" text-anchor="middle" font-size="8" fill="#5A6B7B">plan · execute · evaluate</text>
+    <text x="789" y="955" text-anchor="middle" font-size="8" fill="#5A6B7B">reflect · stop · recover</text>
+    <text x="789" y="968" text-anchor="middle" font-size="8" fill="#5A6B7B">bounded · imports neither plane</text>
+  </g>
+  <g>
+    <rect x="890" y="906" width="200" height="70" rx="8" fill="#fff" stroke="#7D8998" stroke-width="1.1"/>
+    <text x="990" y="926" text-anchor="middle" font-size="9.5" fill="#232F3E" font-weight="700">workflow.Service · agent.Service</text>
+    <text x="990" y="943" text-anchor="middle" font-size="8" fill="#5A6B7B">M5 · M6 · the tools the model may call</text>
+    <text x="990" y="957" text-anchor="middle" font-size="8" fill="#B0341D" font-weight="700">run_workflow · submit_agent_task = WRITE</text>
+    <text x="990" y="968" text-anchor="middle" font-size="8" fill="#5A6B7B">budgets enforced · output validated</text>
+  </g>
+  <g>
+    <rect x="1116" y="906" width="200" height="70" rx="8" fill="#EEFbf8" stroke="#01A88D" stroke-width="1.1"/>
+    <text x="1216" y="926" text-anchor="middle" font-size="9.5" fill="#232F3E" font-weight="700">Extension model (M17)</text>
+    <text x="1216" y="943" text-anchor="middle" font-size="8" fill="#00776A">architecture only · NO AWS resource</text>
+    <text x="1216" y="957" text-anchor="middle" font-size="8" fill="#5A6B7B">new provider / MCP / vector DB =</text>
+    <text x="1216" y="968" text-anchor="middle" font-size="8" fill="#5A6B7B">a client + one factory line + a test</text>
+  </g>
+  <line x1="346" y1="941" x2="368" y2="941" stroke="#7D8998" stroke-width="1.3" marker-end="url(#ag)"/>
+  <line x1="512" y1="941" x2="534" y2="941" stroke="#7D8998" stroke-width="1.3" marker-end="url(#ag)"/>
+
+  <!-- ===================== Component repositories band ===================== -->
+  <rect x="132" y="1040" width="1240" height="96" rx="10" fill="#F7F9FA" stroke="#7D8998" stroke-width="1.6" stroke-dasharray="7 4"/>
+  <text x="150" y="1060" font-size="12" fill="#5A6B7B" font-weight="700">COMPONENT REPOSITORIES — they own the deployments; this repository owns only the contracts (M5, M6, M7) and creates no AWS resources for any of them</text>
 
   <g>
-    <rect x="530" y="766" width="52" height="44" rx="8" fill="#6B7785"/>
-    <text x="556" y="787" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">Open</text>
-    <text x="556" y="799" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">Claw</text>
+    <rect x="150" y="1072" width="52" height="46" rx="8" fill="#6B7785"/>
+    <text x="176" y="1100" text-anchor="middle" font-size="13" fill="#fff" font-weight="700">n8n</text>
+    <text x="212" y="1084" font-size="10" fill="#232F3E" font-weight="700">ORCHESTRATION (M5) · self-hosted-n8n-on-aws</text>
+    <text x="212" y="1098" font-size="8.5" fill="#5A6B7B">What happens, in what order. Idempotency key · payload sanitised.</text>
+    <text x="212" y="1111" font-size="8.5" fill="#5A6B7B">Concurrency-tolerant workflows feed the work queue (M16).</text>
   </g>
-  <text x="592" y="778" font-size="10" fill="#232F3E" font-weight="700">AGENTIC EXECUTION (M6) · openclaw-on-aws</text>
-  <text x="592" y="791" font-size="9" fill="#5A6B7B">An ERRAND: tools, a loop. Budget enforced. It calls its OWN model.</text>
-  <text x="592" y="803" font-size="9" fill="#B0341D" font-weight="700">Its OUTPUT is untrusted: a credential in it is rejected, not published.</text>
-
-
   <g>
-    <rect x="884" y="766" width="52" height="44" rx="8" fill="#6B7785"/>
-    <text x="910" y="787" text-anchor="middle" font-size="10" fill="#fff" font-weight="700">Oll</text>
-    <text x="910" y="799" text-anchor="middle" font-size="10" fill="#fff" font-weight="700">ama</text>
+    <rect x="590" y="1072" width="52" height="46" rx="8" fill="#6B7785"/>
+    <text x="616" y="1093" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">Open</text>
+    <text x="616" y="1105" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">Claw</text>
+    <text x="652" y="1084" font-size="10" fill="#232F3E" font-weight="700">AGENTIC EXECUTION (M6) · openclaw-on-aws</text>
+    <text x="652" y="1098" font-size="8.5" fill="#5A6B7B">An errand: tools, a loop, a budget. It calls its OWN model.</text>
+    <text x="652" y="1111" font-size="8.5" fill="#B0341D" font-weight="700">Its OUTPUT is untrusted: a credential in it is rejected, not published.</text>
   </g>
-  <text x="946" y="778" font-size="10" fill="#232F3E" font-weight="700">INFERENCE (M7) · ollama-on-aws</text>
-  <text x="946" y="791" font-size="9" fill="#5A6B7B">A FUNCTION CALL: one prompt, one completion.</text>
-  <text x="946" y="803" font-size="9" fill="#3F8624" font-weight="700">LOCAL — the prompt never leaves the network.</text>
-  <text x="946" y="816" font-size="9" fill="#3F8624" font-weight="700">LLM_PROVIDER=ollama — the DEFAULT.</text>
-
-  <!-- platform → the components -->
-  <path d="M300,716 C300,726 300,730 300,732" fill="none" stroke="#7D8998" stroke-width="1.6" marker-end="url(#ag)"/>
-  <text x="310" y="730" font-size="9" fill="#5A6B7B" font-weight="700">workflow.Service → Engine</text>
-  <path d="M640,716 C640,726 640,730 640,732" fill="none" stroke="#7D8998" stroke-width="1.6" marker-end="url(#ag)"/>
-  <text x="650" y="730" font-size="9" fill="#5A6B7B" font-weight="700">agent.Service → Runtime</text>
-  <path d="M980,716 C980,726 980,730 980,732" fill="none" stroke="#7D8998" stroke-width="1.6" marker-end="url(#ag)"/>
-  <text x="990" y="730" font-size="9" fill="#5A6B7B" font-weight="700">llm.Service → Provider</text>
-
-  <!-- ===== M9: the inference plane points BACK into the platform =============
-       The most consequential edge on this diagram. Until Milestone 8, inference was a
-       LEAF: a prompt went out, tokens came back, and nothing else happened. Now Claude
-       can call run_workflow and submit_agent_task — so an INFERENCE can start an n8n run
-       and open a pull request. The graph has a cycle in it, and the cycle spends money.
-       That is why "a retry is safe here" had to be withdrawn. -->
   <g>
-    <rect x="884" y="838" width="254" height="62" rx="8" fill="#FDECEE" stroke="#B0341D" stroke-width="1.6"/>
-    <rect x="896" y="846" width="26" height="15" rx="3" fill="#B0341D"/>
-    <text x="909" y="857.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M9</text>
-    <text x="930" y="858" font-size="10" fill="#232F3E" font-weight="700">the TOOL LOOP</text>
-    <text x="896" y="874" font-size="8.5" fill="#B0341D">Claude can RUN these. Bounded: 8 turns, a $ cap.</text>
-    <text x="896" y="886" font-size="8.5" fill="#B0341D" font-weight="700">NEVER retried once a WRITE tool has run.</text>
-    <text x="896" y="896" font-size="8.5" fill="#5A6B7B">The model picks off a menu; it never writes the instruction.</text>
+    <rect x="1010" y="1072" width="52" height="46" rx="8" fill="#6B7785"/>
+    <text x="1036" y="1093" text-anchor="middle" font-size="10" fill="#fff" font-weight="700">Oll</text>
+    <text x="1036" y="1105" text-anchor="middle" font-size="10" fill="#fff" font-weight="700">ama</text>
+    <text x="1072" y="1084" font-size="10" fill="#232F3E" font-weight="700">INFERENCE (M7) · ollama-on-aws</text>
+    <text x="1072" y="1098" font-size="8.5" fill="#3F8624" font-weight="700">LOCAL — the prompt never leaves the network.</text>
+    <text x="1072" y="1111" font-size="8.5" fill="#5A6B7B">LLM_PROVIDER=ollama — the DEFAULT; the router prefers it.</text>
   </g>
 
-  <path d="M884,864 L580,864 Q556,864 556,818" fill="none" stroke="#B0341D" stroke-width="1.8" marker-end="url(#ar)"/>
-  <text x="600" y="858" font-size="9" fill="#B0341D" font-weight="700">submit_agent_task — WRITE · costs money · opens PRs</text>
+  <!-- Go layer -> components -->
+  <path d="M990,978 C700,1010 300,1020 200,1038" fill="none" stroke="#7D8998" stroke-width="1.3" marker-end="url(#ag)"/>
+  <path d="M990,978 L640,1038" fill="none" stroke="#7D8998" stroke-width="1.3" marker-end="url(#ag)"/>
+  <path d="M613,978 C820,1006 1000,1020 1050,1038" fill="none" stroke="#7D8998" stroke-width="1.3" marker-end="url(#ag)"/>
 
-  <path d="M884,890 L218,890 Q194,890 194,818" fill="none" stroke="#B0341D" stroke-width="1.8" marker-end="url(#ar)"/>
-  <text x="230" y="884" font-size="9" fill="#B0341D" font-weight="700">run_workflow — WRITE · a real automation run starts</text>
+  <!-- ===================== Legend ===================== -->
+  <rect x="132" y="1156" width="1240" height="336" rx="8" fill="#F7F9FA" stroke="#D5DBDB" stroke-width="1"/>
+  <text x="150" y="1178" font-size="11" fill="#232F3E" font-weight="700">What each milestone added — and what is still ahead</text>
 
-  <!-- ================= Legend / honesty panel ================= -->
-  <rect x="150" y="914" width="988" height="188" rx="8" fill="#F7F9FA" stroke="#D5DBDB" stroke-width="1"/>
+  <!-- Left column: M2-M10 -->
+  <g font-size="9.5">
+    <rect x="150" y="1190" width="26" height="14" rx="3" fill="#7D8998"/><text x="163" y="1201" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M2</text>
+    <text x="184" y="1201" fill="#232F3E">CloudFormation — VPC · IAM · EC2 · S3 · EventBridge · CloudWatch — the instance is <tspan font-weight="700">disposable</tspan></text>
+    <rect x="150" y="1210" width="26" height="14" rx="3" fill="#E7157B"/><text x="163" y="1221" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M3</text>
+    <text x="184" y="1221" fill="#232F3E">EC2 Spot + interruption handling — disposability is <tspan font-weight="700">safe</tspan></text>
+    <rect x="150" y="1230" width="26" height="14" rx="3" fill="#3F8624"/><text x="163" y="1241" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M4</text>
+    <text x="184" y="1241" fill="#232F3E">Custom AMIs — disposability is <tspan font-weight="700">cheap</tspan> (76 s → 2.5 s boot)</text>
+    <rect x="150" y="1250" width="26" height="14" rx="3" fill="#6B7785"/><text x="163" y="1261" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M5</text>
+    <text x="184" y="1261" fill="#232F3E">n8n — the platform can <tspan font-weight="700">orchestrate</tspan></text>
+    <rect x="150" y="1270" width="26" height="14" rx="3" fill="#6B7785"/><text x="163" y="1281" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M6</text>
+    <text x="184" y="1281" fill="#232F3E">OpenClaw — it can <tspan font-weight="700">delegate work</tspan>, with a budget it cannot exceed</text>
+    <rect x="150" y="1290" width="26" height="14" rx="3" fill="#6B7785"/><text x="163" y="1301" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M7</text>
+    <text x="184" y="1301" fill="#232F3E">Ollama + provider abstraction — it can <tspan font-weight="700">think</tspan>, locally</text>
+    <rect x="150" y="1310" width="26" height="14" rx="3" fill="#01A88D"/><text x="163" y="1321" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M8</text>
+    <text x="184" y="1321" fill="#232F3E">Amazon Bedrock — the same interface, <tspan font-weight="700">hosted</tspan></text>
+    <rect x="150" y="1330" width="26" height="14" rx="3" fill="#B0341D"/><text x="163" y="1341" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M9</text>
+    <text x="184" y="1341" fill="#232F3E">Claude — the model can <tspan font-weight="700">act</tspan> (“a retry is safe here” is withdrawn)</text>
+    <rect x="150" y="1350" width="26" height="14" rx="3" fill="#5A6B7B"/><text x="163" y="1361" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M10</text>
+    <text x="184" y="1361" fill="#232F3E">Hybrid routing — the router <tspan font-weight="700">is</tspan> a provider; choose <tspan font-weight="700">per request</tspan></text>
+    <rect x="150" y="1370" width="26" height="14" rx="3" fill="#5A6B7B"/><text x="163" y="1381" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M11</text>
+    <text x="184" y="1381" fill="#232F3E">Loop engineering — pursue a <tspan font-weight="700">goal</tspan>, bounded and recoverable</text>
+  </g>
 
-  <rect x="166" y="928.0" width="26" height="15" rx="3" fill="#7D8998"/>
-  <text x="179" y="939.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M2</text>
-  <text x="200" y="940.0" font-size="10" fill="#232F3E">VPC · IAM · EC2 · S3 · EventBridge · CloudWatch — the instance is <tspan font-weight="700">disposable</tspan></text>
+  <line x1="700" y1="1190" x2="700" y2="1460" stroke="#D5DBDB" stroke-width="1"/>
 
-  <rect x="166" y="950.0" width="26" height="15" rx="3" fill="#E7157B"/>
-  <text x="179" y="961.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M3</text>
-  <text x="200" y="962.0" font-size="10" fill="#232F3E">Spot + interruption handling — disposability is now <tspan font-weight="700">safe</tspan> (work survives a reclaim)</text>
+  <!-- Right column: M12-M17 -->
+  <g font-size="9.5">
+    <rect x="716" y="1190" width="26" height="14" rx="3" fill="#ED7100"/><text x="729" y="1201" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M12</text>
+    <text x="750" y="1201" fill="#232F3E">GitHub webhooks — an event-driven <tspan font-weight="700">front door</tspan> that never blocks</text>
+    <rect x="716" y="1210" width="26" height="14" rx="3" fill="#CD2264"/><text x="729" y="1221" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M13</text>
+    <text x="750" y="1221" fill="#232F3E">Observability — dashboards, EMF metrics, alarms, health probes</text>
+    <rect x="716" y="1230" width="26" height="14" rx="3" fill="#C7131F"/><text x="729" y="1241" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M14</text>
+    <text x="750" y="1241" fill="#232F3E">Security — egress allow-list, CloudTrail + KMS, CIS-style alarms</text>
+    <rect x="716" y="1250" width="26" height="14" rx="3" fill="#B26A00"/><text x="729" y="1261" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M15</text>
+    <text x="750" y="1261" fill="#232F3E">Cost — Budgets, Cost Anomaly Detection, a billing alarm; arm64 · S3 IT</text>
+    <rect x="716" y="1270" width="26" height="14" rx="3" fill="#C2185B"/><text x="729" y="1281" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M16</text>
+    <text x="750" y="1281" fill="#232F3E">Scalability — an SQS work queue; <tspan font-weight="700">shaped</tspan> to scale horizontally</text>
+    <rect x="716" y="1290" width="26" height="14" rx="3" fill="#01A88D"/><text x="729" y="1301" text-anchor="middle" font-size="8.5" fill="#fff" font-weight="700">M17</text>
+    <text x="750" y="1301" fill="#232F3E">Future Extensions — a <tspan font-weight="700">test-enforced extension model</tspan> (architecture only)</text>
 
-  <rect x="166" y="972.0" width="26" height="15" rx="3" fill="#3F8624"/>
-  <text x="179" y="983.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M4</text>
-  <text x="200" y="984.0" font-size="10" fill="#232F3E">Custom AMIs — disposability is now <tspan font-weight="700">cheap</tspan> (76 s → 6.2 s boot, immutable images)</text>
+    <text x="716" y="1330" font-size="10" fill="#B0341D" font-weight="700">Designed, not built — the next milestones</text>
+    <text x="716" y="1347" fill="#5A6B7B"><tspan font-weight="700">MCP</tspan> — client + server on the existing tool-runner seam (next)</text>
+    <text x="716" y="1362" fill="#5A6B7B"><tspan font-weight="700">RAG / vector store</tspan> — a memory.Store interface is specified, not shipped</text>
+    <text x="716" y="1377" fill="#5A6B7B"><tspan font-weight="700">Worker fleet + Auto Scaling group</tspan> — drains the queue; the signal exists</text>
+    <text x="716" y="1392" fill="#5A6B7B"><tspan font-weight="700">Multi-tenancy · GPU inference on our own hardware</tspan> — not built</text>
+  </g>
 
-  <rect x="166" y="994.0" width="26" height="15" rx="3" fill="#6B7785"/>
-  <text x="179" y="1005.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M5</text>
-  <text x="200" y="1006.0" font-size="10" fill="#232F3E">n8n integration — the platform can now <tspan font-weight="700">orchestrate</tspan> (no AWS resources; the engine is external)</text>
-
-  <rect x="166" y="1016.0" width="26" height="15" rx="3" fill="#6B7785"/>
-  <text x="179" y="1027.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M6</text>
-  <text x="200" y="1028.0" font-size="10" fill="#232F3E">OpenClaw integration — it can now <tspan font-weight="700">delegate work to an agent</tspan>, with a budget it cannot exceed</text>
-
-  <rect x="166" y="1038.0" width="26" height="15" rx="3" fill="#6B7785"/>
-  <text x="179" y="1049.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M7</text>
-  <text x="200" y="1050.0" font-size="10" fill="#232F3E">Ollama + provider abstraction — it can now <tspan font-weight="700">think for itself</tspan>, locally (an errand is not a function call)</text>
-
-  <rect x="166" y="1060.0" width="26" height="15" rx="3" fill="#01A88D"/>
-  <text x="179" y="1071.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M8</text>
-  <text x="200" y="1072.0" font-size="10" fill="#232F3E">Amazon Bedrock — the same interface, <tspan font-weight="700">hosted</tspan> (a sample of one is not an abstraction)</text>
-
-  <rect x="166" y="1082.0" width="26" height="15" rx="3" fill="#B0341D"/>
-  <text x="179" y="1093.5" text-anchor="middle" font-size="9" fill="#fff" font-weight="700">M9</text>
-  <text x="200" y="1094.0" font-size="10" fill="#232F3E">Claude — the model can now <tspan font-weight="700">act</tspan>: tool use, schemas, reasoning (“a retry is safe here” is <tspan font-weight="700">withdrawn</tspan>)</text>
-
-  <line x1="690" y1="928.0" x2="690" y2="1088.0" stroke="#D5DBDB" stroke-width="1"/>
-  <text x="710" y="940.0" font-size="10" fill="#B0341D" font-weight="700">NOT built yet</text>
-  <text x="710" y="956.0" font-size="9.5" fill="#5A6B7B"><tspan font-weight="700">routing</tspan> (M10) — the provider is chosen once, at start-up, not per request</text>
-  <text x="710" y="970.0" font-size="9.5" fill="#5A6B7B"><tspan font-weight="700">failover</tspan> (M10) — and M9 made it HARDER: a conversation that has already</text>
-  <text x="710" y="983.0" font-size="9.5" fill="#5A6B7B">run a tool cannot be replayed on another provider — it would run it twice</text>
-  <text x="710" y="999.0" font-size="9.5" fill="#5A6B7B">the webhook handler that calls the integrations (M12)</text>
-  <text x="710" y="1013.0" font-size="9.5" fill="#5A6B7B">Auto Scaling group (still one instance) · alarms + dashboards</text>
+  <text x="716" y="1428" font-size="9" fill="#5A6B7B" font-style="italic">This is a redrawn snapshot at Milestone 17. The Mermaid view in current-architecture.md is the version kept current each milestone.</text>
 </svg>
